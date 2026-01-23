@@ -1,0 +1,214 @@
+import { useState } from 'react';
+import { Card, CardContent, CardHeader, CardTitle } from '@/app/components/ui/card';
+import { Button } from '@/app/components/ui/button';
+import { Input } from '@/app/components/ui/input';
+import { Label } from '@/app/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/app/components/ui/select';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/app/components/ui/dialog';
+import { Progress } from '@/app/components/ui/progress';
+import { mockPacientes } from '@/app/data/mockData';
+import { useAuth } from '@/app/context/AuthContext';
+import { Award, TrendingUp, Plus, Trophy, Star, Target, Crown } from 'lucide-react';
+import { toast } from 'sonner';
+
+export function Gamificacion() {
+  const { user } = useAuth();
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [selectedPaciente, setSelectedPaciente] = useState('');
+  const [puntosAsignar, setPuntosAsignar] = useState('');
+
+  const misPacientes = mockPacientes.filter(p => p.nutriologoId === user?.id);
+  const pacientesOrdenados = [...misPacientes].sort((a, b) => b.puntos - a.puntos);
+
+  const handleAsignarPuntos = (e: React.FormEvent) => {
+    e.preventDefault();
+    const paciente = misPacientes.find(p => p.id === selectedPaciente);
+    toast.success(`${puntosAsignar} puntos asignados a ${paciente?.nombre}`);
+    setIsDialogOpen(false);
+    setSelectedPaciente('');
+    setPuntosAsignar('');
+  };
+
+  const getNivelPaciente = (puntos: number) => {
+    if (puntos >= 300) return { nivel: 'Oro', color: 'text-yellow-600', border: 'border-yellow-200', bgColor: 'bg-yellow-50', icon: Crown };
+    if (puntos >= 200) return { nivel: 'Plata', color: 'text-slate-500', border: 'border-slate-200', bgColor: 'bg-slate-50', icon: Award };
+    if (puntos >= 100) return { nivel: 'Bronce', color: 'text-orange-600', border: 'border-orange-200', bgColor: 'bg-orange-50', icon: Star };
+    return { nivel: 'Iniciante', color: 'text-emerald-600', border: 'border-emerald-200', bgColor: 'bg-emerald-50', icon: Target };
+  };
+
+  const getProgresoNivel = (puntos: number) => {
+    if (puntos >= 300) return 100;
+    if (puntos >= 200) return ((puntos - 200) / 100) * 100;
+    if (puntos >= 100) return ((puntos - 100) / 100) * 100;
+    return (puntos / 100) * 100;
+  };
+
+  return (
+    <div className="min-h-screen p-4 md:p-10 font-sans bg-[#F8FFF9] space-y-10">
+      <div className="max-w-7xl mx-auto space-y-10">
+        
+        {/* Header */}
+        <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 px-2">
+          <div>
+            <div className="inline-flex flex-col items-start">
+              <h1 className="text-3xl md:text-4xl font-[900] text-[#2E8B57] tracking-[4px] uppercase leading-none">
+                Gamificación
+              </h1>
+              <div className="w-16 h-1.5 bg-[#3CB371] rounded-full mt-3" />
+            </div>
+            <p className="text-[#3CB371] font-bold text-sm mt-4 uppercase tracking-[2px]">
+              Motiva el progreso de tus pacientes
+            </p>
+          </div>
+          
+          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+            <DialogTrigger asChild>
+              <Button className="w-full md:w-auto bg-[#2E8B57] hover:bg-[#1A3026] text-white font-black py-6 px-8 rounded-2xl shadow-lg transition-all uppercase tracking-widest text-xs flex items-center justify-center gap-2">
+                <Plus className="h-5 w-5" />
+                Asignar Puntos
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="rounded-[2.5rem] border-2 border-[#D1E8D5] p-8">
+              <DialogHeader>
+                <DialogTitle className="text-xl font-[900] text-[#2E8B57] uppercase tracking-wider">Premia el esfuerzo</DialogTitle>
+              </DialogHeader>
+              <form onSubmit={handleAsignarPuntos} className="space-y-6 mt-4">
+                <div className="space-y-2">
+                  <Label className="text-[10px] font-black uppercase text-gray-400 tracking-wider">Paciente</Label>
+                  <Select value={selectedPaciente} onValueChange={setSelectedPaciente}>
+                    <SelectTrigger className="border-2 border-[#D1E8D5] rounded-xl h-12">
+                      <SelectValue placeholder="Selecciona un paciente" />
+                    </SelectTrigger>
+                    <SelectContent className="rounded-xl">
+                      {misPacientes.map((paciente) => (
+                        <SelectItem key={paciente.id} value={paciente.id} className="font-bold text-xs uppercase">
+                          {paciente.nombre} ({paciente.puntos} pts)
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="puntos" className="text-[10px] font-black uppercase text-gray-400 tracking-wider">Cantidad de Puntos</Label>
+                  <Input
+                    id="puntos"
+                    type="number"
+                    className="border-2 border-[#D1E8D5] rounded-xl h-12 font-bold"
+                    value={puntosAsignar}
+                    onChange={(e) => setPuntosAsignar(e.target.value)}
+                    required
+                  />
+                </div>
+                <Button type="submit" className="w-full bg-[#2E8B57] text-white font-black uppercase text-[10px] tracking-widest h-14 rounded-xl">
+                  Confirmar Recompensa
+                </Button>
+              </form>
+            </DialogContent>
+          </Dialog>
+        </div>
+
+        {/* Niveles Visuales */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          {[
+            { n: 'Iniciante', pts: '0-99', color: 'text-emerald-600', bg: 'bg-emerald-50', icon: Target },
+            { n: 'Bronce', pts: '100-199', color: 'text-orange-600', bg: 'bg-orange-50', icon: Star },
+            { n: 'Plata', pts: '200-299', color: 'text-slate-500', bg: 'bg-slate-50', icon: Award },
+            { n: 'Oro', pts: '300+', color: 'text-yellow-600', bg: 'bg-yellow-50', icon: Crown },
+          ].map((lvl) => (
+            <Card key={lvl.n} className="rounded-[2rem] border-2 border-[#D1E8D5] overflow-hidden shadow-none">
+              <CardContent className={`p-6 flex flex-col items-center justify-center text-center space-y-2 ${lvl.bg}`}>
+                <lvl.icon className={lvl.color} size={24} />
+                <p className={`font-black text-[10px] uppercase tracking-tighter ${lvl.color}`}>{lvl.n}</p>
+                <p className="text-[10px] font-bold text-gray-400">{lvl.pts} PTS</p>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          {/* Ranking */}
+          <Card className="rounded-[2.5rem] border-2 border-[#D1E8D5] overflow-hidden bg-white shadow-sm">
+            <CardHeader className="bg-[#F8FFF9] border-b border-[#D1E8D5] p-8">
+              <CardTitle className="text-sm font-[900] text-[#1A3026] uppercase tracking-[2px] flex items-center gap-2">
+                <Trophy className="text-[#2E8B57]" size={18} /> Hall de la Fama
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-8 space-y-6">
+              {pacientesOrdenados.map((paciente, index) => {
+                const nivel = getNivelPaciente(paciente.puntos);
+                const progreso = getProgresoNivel(paciente.puntos);
+                return (
+                  <div key={paciente.id} className="group relative">
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center gap-4">
+                        <div className={`h-12 w-12 rounded-2xl flex items-center justify-center font-black text-sm border-2 ${
+                          index === 0 ? 'bg-yellow-400 border-yellow-500 text-white' : 'bg-white border-[#D1E8D5] text-[#2E8B57]'
+                        }`}>
+                          #{index + 1}
+                        </div>
+                        <div>
+                          <p className="font-black text-[#1A3026] uppercase text-xs">{paciente.nombre} {paciente.apellido}</p>
+                          <div className={`inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-lg border-2 ${nivel.border} ${nivel.bgColor}`}>
+                             <nivel.icon size={10} className={nivel.color} />
+                             <span className={`text-[8px] font-black uppercase ${nivel.color}`}>{nivel.nivel}</span>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-lg font-black text-[#1A3026] leading-none">{paciente.puntos}</p>
+                        <p className="text-[8px] font-bold text-gray-400 uppercase tracking-widest mt-1">Puntos Totales</p>
+                      </div>
+                    </div>
+                    <div className="space-y-1">
+                      <div className="flex justify-between text-[9px] font-black uppercase text-gray-400 tracking-tighter">
+                        <span>Progreso de Nivel</span>
+                        <span>{progreso.toFixed(0)}%</span>
+                      </div>
+                      <Progress value={progreso} className="h-1.5 bg-[#F0FFF4]" />
+                    </div>
+                  </div>
+                );
+              })}
+            </CardContent>
+          </Card>
+
+          {/* Metas y Rendimiento */}
+          <Card className="rounded-[2.5rem] border-2 border-[#D1E8D5] overflow-hidden bg-white shadow-sm">
+            <CardHeader className="bg-[#F8FFF9] border-b border-[#D1E8D5] p-8">
+              <CardTitle className="text-sm font-[900] text-[#1A3026] uppercase tracking-[2px] flex items-center gap-2">
+                <TrendingUp className="text-[#2E8B57]" size={18} /> Cumplimiento de Metas
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-8 space-y-8">
+              {misPacientes.map((paciente) => {
+                const promedio = paciente.caloriasConsumidas.reduce((a, b) => a + b, 0) / 7;
+                const cumplimiento = (promedio / paciente.metaCalorias) * 100;
+                const esExitoso = cumplimiento >= 90 && cumplimiento <= 110;
+
+                return (
+                  <div key={paciente.id} className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="font-black text-[#1A3026] uppercase text-xs">{paciente.nombre}</p>
+                        <p className="text-[10px] font-bold text-gray-400 tracking-tight">META: {paciente.metaCalorias} KCAL</p>
+                      </div>
+                      <div className={`px-4 py-2 rounded-xl border-2 font-black text-[10px] uppercase shadow-sm ${
+                        esExitoso ? 'bg-[#F0FFF4] border-[#D1E8D5] text-[#2E8B57]' : 'bg-orange-50 border-orange-100 text-orange-600'
+                      }`}>
+                        {cumplimiento.toFixed(0)}% Performance
+                      </div>
+                    </div>
+                    <Progress 
+                      value={Math.min(cumplimiento, 100)} 
+                      className={`h-3 rounded-full ${esExitoso ? 'bg-[#F0FFF4]' : 'bg-orange-50'}`} 
+                    />
+                  </div>
+                );
+              })}
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    </div>
+  );
+}
