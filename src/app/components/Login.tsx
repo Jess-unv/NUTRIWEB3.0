@@ -16,25 +16,25 @@ import {
   X
 } from 'lucide-react';
 
-// --- FONDO ANIMADO INDEPENDIENTE (MEMOIZADO) ---
+// --- FONDO DE LLUVIA LENTA (MEMOIZADO) ---
 const FloatingBackground = memo(() => {
   const icons = [
-    <Leaf size={40} />, <Apple size={40} />, 
-    <Stethoscope size={40} />, <HeartPulse size={40} />, 
-    <Salad size={40} />, <Activity size={40} />
+    <Leaf size={32} />, <Apple size={32} />, 
+    <Stethoscope size={32} />, <HeartPulse size={32} />, 
+    <Salad size={32} />, <Activity size={32} />
   ];
 
   return (
     <div className="absolute inset-0 overflow-hidden pointer-events-none z-0 bg-[#F0FFF4]">
-      {[...Array(25)].map((_, i) => (
+      {[...Array(20)].map((_, i) => (
         <div
           key={i}
-          className="absolute opacity-0 animate-float-random"
+          className="absolute opacity-0 animate-rain"
           style={{
-            left: `${(i * 13) % 100}%`,
-            top: `${(i * 7) % 100}%`,
-            animationDelay: `${i * 0.8}s`,
-            animationDuration: `${15 + (i % 10)}s`,
+            left: `${(i * 5) % 100}%`, // Distribución horizontal
+            top: '-10%', // Empieza fuera de la pantalla (arriba)
+            animationDelay: `${i * 0.7}s`,
+            animationDuration: `${10 + (i % 8)}s`, // Velocidad variada para efecto natural
             color: '#2D6A4F',
           }}
         >
@@ -66,7 +66,7 @@ export function Login() {
     return allowedDomains.test(email);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
     if (!email || !password) {
@@ -79,11 +79,15 @@ export function Login() {
       return;
     }
 
-    const success = login(email, password);
-    if (!success) {
-      setNotification({ msg: 'Credenciales incorrectas', type: 'error' });
-    } else {
-      setNotification({ msg: '¡Bienvenido de nuevo!', type: 'success' });
+    try {
+      const success = await login(email, password);
+      if (!success) {
+        setNotification({ msg: 'Credenciales incorrectas o usuario no autorizado', type: 'error' });
+      } else {
+        setNotification({ msg: '¡Bienvenido de nuevo!', type: 'success' });
+      }
+    } catch (error) {
+      setNotification({ msg: 'Error al iniciar sesión. Intenta de nuevo.', type: 'error' });
     }
   };
 
@@ -182,14 +186,24 @@ export function Login() {
       </div>
 
       <style jsx global>{`
-        @keyframes floatRandom {
-          0% { transform: translateY(0) rotate(0deg); opacity: 0; }
-          10% { opacity: 0.2; }
-          90% { opacity: 0.2; }
-          100% { transform: translateY(-100vh) rotate(360deg); opacity: 0; }
+        @keyframes rain {
+          0% { 
+            transform: translateY(0) rotate(0deg); 
+            opacity: 0; 
+          }
+          15% { 
+            opacity: 0.15; 
+          }
+          85% { 
+            opacity: 0.15; 
+          }
+          100% { 
+            transform: translateY(110vh) rotate(20deg); 
+            opacity: 0; 
+          }
         }
-        .animate-float-random {
-          animation: floatRandom linear infinite;
+        .animate-rain {
+          animation: rain linear infinite;
         }
         @keyframes slideIn {
           from { transform: translateX(100%); opacity: 0; }

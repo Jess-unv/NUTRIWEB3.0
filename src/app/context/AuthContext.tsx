@@ -1,6 +1,6 @@
-import React, { createContext, useContext, useState, ReactNode, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect } from 'react';
+import { supabase } from './supabaseClient';
 
-// --- INTERFACES ---
 export interface User {
   id: string;
   email: string;
@@ -14,114 +14,163 @@ export interface User {
 
 interface AuthContextType {
   user: User | null;
-  login: (email: string, password: string) => boolean;
-  logout: () => void;
-  updateProfile: (data: Partial<User>) => void;
-  loading: boolean; // Añadido para controlar la hidratación
+  login: (email: string, password: string) => Promise<boolean>;
+  logout: () => Promise<void>;
+  updateProfile: (data: Partial<User>) => Promise<void>;
+  loading: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// --- DATOS MOCK ---
-const mockUsers: (User & { password: string })[] = [
-  {
-    id: '1',
-    email: 'admin@nutriu.com',
-    password: 'admin123',
-    nombre: 'Admin',
-    apellido: 'Principal',
-    nombreUsuario: 'admin',
-    celular: '5551234567',
-    rol: 'admin'
-  },
-  {
-    id: '2',
-    email: 'maria@nutriu.com',
-    password: 'nutri123',
-    nombre: 'María',
-    apellido: 'González',
-    nombreUsuario: 'mariag',
-    celular: '5559876543',
-    rol: 'nutriologo',
-    tarifa: 500
-  },
-  {
-    id: '3',
-    email: 'carlos@nutriu.com',
-    password: 'nutri123',
-    nombre: 'Carlos',
-    apellido: 'Ramírez',
-    nombreUsuario: 'carlosr',
-    celular: '5551122334',
-    rol: 'nutriologo',
-    tarifa: 600
-  }
-];
-
-// --- PROVIDER ---
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // EFECTO DE PERSISTENCIA: Se ejecuta una sola vez al cargar la app
   useEffect(() => {
-    const storedUser = localStorage.getItem('user');
-    if (storedUser) {
+    const restoreSession = async () => {
+      console.log('[Auth] Iniciando restauración al cargar/refrescar...');
       try {
-        setUser(JSON.parse(storedUser));
-      } catch (error) {
-        console.error("Error al restaurar sesión:", error);
-        localStorage.removeItem('user');
+        const timeout = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Timeout en getSession')), 10000)
+        );
+
+        const { data: { session } } = await Promise.race([
+          supabase.auth.getSession(),
+          timeout
+        ]);
+
+        if (session?.user) {
+          console.log('[Auth] Sesión restaurada, cargando perfil...');
+          await fetchUserData(session.user.id);
+        }
+      } catch (err) {
+        console.error('[Auth] Error restaurando sesión:', err);
+      } finally {
+        console.log('[Auth] Restauración terminada → loading = false');
+        setLoading(false);
       }
-    }
-    setLoading(false); // La app está lista tras verificar localStorage
+    };
+
+    restoreSession();
+
+    const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === 'SIGNED_IN' && session?.user) {
+        await fetchUserData(session.user.id);
+      } else if (event === 'SIGNED_OUT') {
+        setUser(null);
+      }
+    });
+
+    return () => authListener.subscription.unsubscribe();
   }, []);
 
-  // Función de Login con persistencia
-  const login = (email: string, password: string): boolean => {
-    const foundUser = mockUsers.find(
-      u => u.email === email && u.password === password
-    );
-    
-    if (foundUser) {
-      const { password: _, ...userData } = foundUser;
-      setUser(userData);
-      localStorage.setItem('user', JSON.stringify(userData));
-      return true;
+  const fetchUserData = async (userId: string) => {
+    console.log('[fetchUserData] INICIO para ID:', userId);
+
+    try {
+      // Timeout por consulta
+      const timeout = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Timeout en consulta Supabase')), 8000)
+      );
+
+      // Administradores
+      const adminPromise = supabase
+        .from('administradores')
+        .select('id_admin, nombre, apellido, correo, numero_celular')
+        .eq('id_auth_user', userId)
+        .maybeSingle();
+
+      const adminResult = await Promise.race([adminPromise, timeout]);
+      console.log('[fetchUserData] Administradores:', adminResult);
+
+      if (adminResult.data) {
+        console.log('[fetchUserData] ADMINISTRADOR ENCONTRADO');
+        setUser({
+          id: adminResult.data.id_admin.toString(),
+          email: adminResult.data.correo || '',
+          nombre: adminResult.data.nombre || '',
+          apellido: adminResult.data.apellido || '',
+          nombreUsuario: '',
+          celular: adminResult.data.numero_celular || '',
+          rol: 'admin',
+        });
+        return;
+      }
+
+      // Nutriólogos
+      const nutriPromise = supabase
+        .from('nutriologos')
+        .select('id_nutriologo, nombre, apellido, correo, numero_celular, tarifa_consulta')
+        .eq('id_auth_user', userId)
+        .maybeSingle();
+
+      const nutriResult = await Promise.race([nutriPromise, timeout]);
+      console.log('[fetchUserData] Nutriólogos:', nutriResult);
+
+      if (nutriResult.data) {
+        console.log('[fetchUserData] NUTRIÓLOGO ENCONTRADO');
+        setUser({
+          id: nutriResult.data.id_nutriologo.toString(),
+          email: nutriResult.data.correo || '',
+          nombre: nutriResult.data.nombre || '',
+          apellido: nutriResult.data.apellido || '',
+          nombreUsuario: '',
+          celular: nutriResult.data.numero_celular || '',
+          rol: 'nutriologo',
+          tarifa: nutriResult.data.tarifa_consulta,
+        });
+        return;
+      }
+
+      console.warn('[fetchUserData] No encontrado');
+      setUser(null);
+    } catch (error: any) {
+      console.error('[fetchUserData] Error o timeout:', error.message || error);
+      setUser(null);
+    } finally {
+      console.log('[fetchUserData] FIN');
     }
-    return false;
   };
 
-  // Función de Logout (limpieza)
-  const logout = () => {
+  const login = async (email: string, password: string): Promise<boolean> => {
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) throw error;
+      if (data.user) {
+        await fetchUserData(data.user.id);
+        return true;
+      }
+      return false;
+    } catch (error: any) {
+      console.error('Login error:', error.message);
+      return false;
+    }
+  };
+
+  const logout = async () => {
+    await supabase.auth.signOut();
     setUser(null);
-    localStorage.removeItem('user');
   };
 
-  // Actualización de perfil con persistencia
-  const updateProfile = (data: Partial<User>) => {
-    if (user) {
-      const updatedUser = { ...user, ...data };
-      setUser(updatedUser);
-      localStorage.setItem('user', JSON.stringify(updatedUser));
-    }
+  const updateProfile = async (data: Partial<User>) => {
+    if (!user) return;
+    const table = user.rol === 'admin' ? 'administradores' : 'nutriologos';
+    const { error } = await supabase
+      .from(table)
+      .update({ nombre: data.nombre, apellido: data.apellido })
+      .eq('id_auth_user', user.id);
+    if (!error) setUser(prev => prev ? { ...prev, ...data } : null);
   };
 
   return (
     <AuthContext.Provider value={{ user, login, logout, updateProfile, loading }}>
-      {/* Importante: No renderizamos los hijos hasta que loading sea false.
-          Esto evita que el usuario vea el login si ya tiene sesión iniciada.
-      */}
-      {!loading && children}
+      {children}
     </AuthContext.Provider>
   );
 }
 
-// --- HOOK ---
 export function useAuth() {
   const context = useContext(AuthContext);
-  if (context === undefined) {
-    throw new Error('useAuth debe usarse dentro de un AuthProvider');
-  }
+  if (context === undefined) throw new Error('useAuth debe usarse dentro de AuthProvider');
   return context;
 }

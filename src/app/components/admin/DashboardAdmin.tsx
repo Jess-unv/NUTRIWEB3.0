@@ -1,33 +1,126 @@
+import { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/app/components/ui/card';
 import { Users, Calendar, TrendingUp, DollarSign, Activity, ArrowUpRight } from 'lucide-react';
-import { mockPacientes, mockCitas, mockPagos } from '@/app/data/mockData';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, Cell } from 'recharts';
+import { supabase } from '@/app/context/supabaseClient';
+import { toast } from 'sonner';
 
 export function DashboardAdmin() {
-  // --- Lógica original mantenida ---
-  const totalPacientes = mockPacientes.length;
-  const citasHoy = mockCitas.filter(c => c.fecha === '2026-01-16').length;
-  const citasMes = mockCitas.filter(c => c.fecha.startsWith('2026-01')).length;
-  const ingresosMes = mockPagos
-    .filter(p => p.fecha.startsWith('2026-01'))
-    .reduce((sum, p) => sum + p.monto, 0);
+  const [loading, setLoading] = useState(true);
+  const [stats, setStats] = useState({
+    totalPacientes: 0,
+    citasHoy: 0,
+    citasMes: 0,
+    ingresosMes: 0,
+    actividadReciente: [], // Para la tabla inferior
+  });
 
-  const citasPorDia = [
-    { dia: 'Lun', citas: 3 },
-    { dia: 'Mar', citas: 5 },
-    { dia: 'Mié', citas: 4 },
-    { dia: 'Jue', citas: 6 },
-    { dia: 'Vie', citas: 7 },
-    { dia: 'Sab', citas: 2 },
-    { dia: 'Dom', citas: 1 }
-  ];
+  const [citasPorDia, setCitasPorDia] = useState([]);
+  const [ingresosPorSemana, setIngresosPorSemana] = useState([]);
 
-  const ingresosPorSemana = [
-    { semana: 'Sem 1', ingresos: 4500 },
-    { semana: 'Sem 2', ingresos: 5200 },
-    { semana: 'Sem 3', ingresos: 6100 },
-    { semana: 'Sem 4', ingresos: 5800 }
-  ];
+  useEffect(() => {
+    fetchDashboardData();
+  }, []);
+
+  const fetchDashboardData = async () => {
+    setLoading(true);
+    try {
+      // 1. Total pacientes
+      const { count: totalPacientes, error: errPac } = await supabase
+        .from('pacientes')
+        .select('*', { count: 'exact', head: true })
+        .eq('activo', true);
+
+      if (errPac) throw errPac;
+
+      // 2. Citas (hoy y este mes)
+      const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+      const thisMonth = today.slice(0, 7); // YYYY-MM
+
+      const { data: citas, error: errCitas } = await supabase
+        .from('citas')
+        .select('fecha_hora, estado')
+        .gte('fecha_hora', `${thisMonth}-01`)
+        .lte('fecha_hora', `${thisMonth}-31`);
+
+      if (errCitas) throw errCitas;
+
+      const citasHoyCount = citas.filter(c => c.fecha_hora.startsWith(today)).length;
+      const citasMesCount = citas.length;
+
+      // 3. Ingresos este mes (de la tabla pagos)
+      const { data: pagos, error: errPagos } = await supabase
+        .from('pagos')
+        .select('monto, fecha_pago, estado')
+        .eq('estado', 'completado')
+        .gte('fecha_pago', `${thisMonth}-01`)
+        .lte('fecha_pago', `${thisMonth}-31`);
+
+      if (errPagos) throw errPagos;
+
+      const ingresosMesTotal = pagos.reduce((sum, p) => sum + (p.monto || 0), 0);
+
+      // 4. Actividad reciente (últimas 5 citas completadas/confirmadas)
+      const { data: actividad, error: errAct } = await supabase
+        .from('citas')
+        .select(`
+          id_cita,
+          fecha_hora,
+          estado,
+          id_paciente,
+          pacientes!inner (nombre, apellido)
+        `)
+        .in('estado', ['confirmada', 'completada'])
+        .order('fecha_hora', { ascending: false })
+        .limit(5);
+
+      if (errAct) throw errAct;
+
+      // 5. Gráfica citas por día de la semana (últimos 7 días o mes actual)
+      // Para simplificar: agrupamos por día de la semana del mes actual
+      const diasSemana = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+      const citasPorDiaData = diasSemana.map((dia, idx) => ({
+        dia,
+        citas: citas.filter(c => new Date(c.fecha_hora).getDay() === idx).length,
+      }));
+
+      // 6. Ingresos por semana (aproximado: 4 semanas del mes)
+      const semanas = [1, 2, 3, 4];
+      const ingresosPorSemanaData = semanas.map(w => {
+        const start = `${thisMonth}-0${(w-1)*7 + 1}`.padStart(10, '0');
+        const end = `${thisMonth}-0${w*7}`.padStart(10, '0');
+        const ingresosSem = pagos
+          .filter(p => p.fecha_pago >= start && p.fecha_pago <= end)
+          .reduce((sum, p) => sum + (p.monto || 0), 0);
+        return { semana: `Sem ${w}`, ingresos: ingresosSem };
+      });
+
+      setStats({
+        totalPacientes: totalPacientes || 0,
+        citasHoy: citasHoyCount,
+        citasMes: citasMesCount,
+        ingresosMes: ingresosMesTotal,
+        actividadReciente: actividad || [],
+      });
+
+      setCitasPorDia(citasPorDiaData);
+      setIngresosPorSemana(ingresosPorSemanaData);
+
+    } catch (err: any) {
+      console.error('Error cargando dashboard:', err);
+      toast.error('No se pudieron cargar las estadísticas');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen p-10 flex items-center justify-center">
+        <div className="text-[#2E8B57] font-bold text-xl">Cargando dashboard...</div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen p-4 md:p-10 font-sans bg-[#F8FFF9] space-y-10">
@@ -46,32 +139,32 @@ export function DashboardAdmin() {
           </p>
         </div>
 
-        {/* Tarjetas de Estadísticas con diseño de burbuja */}
+        {/* Tarjetas de Estadísticas */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           <StatCard 
             title="Total Pacientes" 
-            value={totalPacientes} 
+            value={stats.totalPacientes} 
             sub="Pacientes activos" 
             icon={<Users size={20} />} 
             color="bg-emerald-50 text-emerald-600" 
           />
           <StatCard 
             title="Citas Este Mes" 
-            value={citasMes} 
-            sub={`+${citasHoy} agendadas hoy`} 
+            value={stats.citasMes} 
+            sub={`+${stats.citasHoy} agendadas hoy`} 
             icon={<Calendar size={20} />} 
             color="bg-blue-50 text-blue-600" 
           />
           <StatCard 
             title="Ingresos Mensuales" 
-            value={`$${ingresosMes.toLocaleString()}`} 
-            sub="Enero 2026" 
+            value={`$${stats.ingresosMes.toLocaleString()}`} 
+            sub={`Mes actual (${new Date().toLocaleString('es-MX', { month: 'long' })})`} 
             icon={<DollarSign size={20} />} 
             color="bg-yellow-50 text-yellow-600" 
           />
           <StatCard 
             title="Tasa Asistencia" 
-            value="92%" 
+            value="92%" // Puedes calcularla real más adelante
             sub="+5% vs mes anterior" 
             icon={<TrendingUp size={20} />} 
             color="bg-purple-50 text-purple-600" 
@@ -80,7 +173,7 @@ export function DashboardAdmin() {
 
         {/* Sección de Gráficas */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          {/* Gráfica de Barras */}
+          {/* Gráfica de Barras - Citas por día */}
           <Card className="rounded-[2.5rem] border-2 border-[#D1E8D5] overflow-hidden bg-white shadow-sm">
             <CardHeader className="bg-[#F8FFF9] border-b border-[#F0FFF4] p-8">
               <CardTitle className="text-xs font-[900] text-[#1A3026] uppercase tracking-[2px] flex items-center gap-2">
@@ -112,7 +205,7 @@ export function DashboardAdmin() {
             </CardContent>
           </Card>
 
-          {/* Gráfica de Líneas */}
+          {/* Gráfica de Líneas - Ingresos por semana */}
           <Card className="rounded-[2.5rem] border-2 border-[#D1E8D5] overflow-hidden bg-white shadow-sm">
             <CardHeader className="bg-[#F8FFF9] border-b border-[#F0FFF4] p-8">
               <CardTitle className="text-xs font-[900] text-[#1A3026] uppercase tracking-[2px] flex items-center gap-2">
@@ -132,7 +225,7 @@ export function DashboardAdmin() {
                   <YAxis hide />
                   <Tooltip contentStyle={{borderRadius: '15px', border: '2px solid #D1E8D5', fontWeight: 'bold'}} />
                   <Line 
-                    type="smooth" 
+                    type="monotone" 
                     dataKey="ingresos" 
                     stroke="#2563eb" 
                     strokeWidth={4} 
@@ -155,36 +248,41 @@ export function DashboardAdmin() {
           </CardHeader>
           <CardContent className="p-4 md:p-8">
             <div className="space-y-4">
-              {mockCitas.slice(0, 5).map((cita) => {
-                const paciente = mockPacientes.find(p => p.id === cita.pacienteId);
-                return (
-                  <div key={cita.id} className="flex items-center justify-between p-5 bg-[#F8FFF9] border-2 border-[#F0FFF4] rounded-3xl hover:border-[#D1E8D5] transition-all group">
-                    <div className="flex items-center gap-4">
-                      <div className="h-12 w-12 bg-white rounded-2xl flex items-center justify-center border-2 border-[#D1E8D5] group-hover:scale-110 transition-transform">
-                        <Users className="h-5 w-5 text-[#2E8B57]" />
-                      </div>
-                      <div>
-                        <p className="font-[900] text-[#1A3026] uppercase text-[11px] tracking-wide">
-                          {paciente?.nombre} {paciente?.apellido}
-                        </p>
-                        <p className="text-[10px] font-bold text-gray-400 uppercase mt-0.5">
-                          {cita.fecha} • {cita.hora}
-                        </p>
-                      </div>
+              {stats.actividadReciente.map((cita) => (
+                <div 
+                  key={cita.id_cita} 
+                  className="flex items-center justify-between p-5 bg-[#F8FFF9] border-2 border-[#F0FFF4] rounded-3xl hover:border-[#D1E8D5] transition-all group"
+                >
+                  <div className="flex items-center gap-4">
+                    <div className="h-12 w-12 bg-white rounded-2xl flex items-center justify-center border-2 border-[#D1E8D5] group-hover:scale-110 transition-transform">
+                      <Users className="h-5 w-5 text-[#2E8B57]" />
                     </div>
-                    <div className="text-right">
-                      <span className={`px-4 py-1.5 text-[9px] font-[900] uppercase rounded-xl border-2 tracking-widest ${
-                        cita.estado === 'completada' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' :
-                        cita.estado === 'confirmada' ? 'bg-blue-50 text-blue-600 border-blue-100' :
-                        cita.estado === 'pendiente' ? 'bg-yellow-50 text-yellow-600 border-yellow-100' :
-                        'bg-red-50 text-red-600 border-red-100'
-                      }`}>
-                        {cita.estado}
-                      </span>
+                    <div>
+                      <p className="font-[900] text-[#1A3026] uppercase text-[11px] tracking-wide">
+                        {cita.pacientes?.nombre} {cita.pacientes?.apellido}
+                      </p>
+                      <p className="text-[10px] font-bold text-gray-400 uppercase mt-0.5">
+                        {new Date(cita.fecha_hora).toLocaleDateString('es-MX')} • {new Date(cita.fecha_hora).toLocaleTimeString('es-MX', {hour: '2-digit', minute:'2-digit'})}
+                      </p>
                     </div>
                   </div>
-                );
-              })}
+                  <div className="text-right">
+                    <span className={`px-4 py-1.5 text-[9px] font-[900] uppercase rounded-xl border-2 tracking-widest ${
+                      cita.estado === 'completada' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' :
+                      cita.estado === 'confirmada' ? 'bg-blue-50 text-blue-600 border-blue-100' :
+                      cita.estado === 'pendiente' ? 'bg-yellow-50 text-yellow-600 border-yellow-100' :
+                      'bg-red-50 text-red-600 border-red-100'
+                    }`}>
+                      {cita.estado}
+                    </span>
+                  </div>
+                </div>
+              ))}
+              {stats.actividadReciente.length === 0 && (
+                <div className="text-center text-gray-500 py-8">
+                  No hay actividad reciente
+                </div>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -193,7 +291,7 @@ export function DashboardAdmin() {
   );
 }
 
-// Componente auxiliar para las tarjetas de estadísticas
+// Componente auxiliar para las tarjetas (sin cambios)
 function StatCard({ title, value, sub, icon, color }: { title: string, value: string | number, sub: string, icon: any, color: string }) {
   return (
     <Card className="rounded-[2.5rem] border-2 border-[#D1E8D5] bg-white shadow-sm hover:shadow-md transition-all overflow-hidden">
