@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/app/components/ui/card';
 import { Button } from '@/app/components/ui/button';
 import { Input } from '@/app/components/ui/input';
@@ -6,8 +6,8 @@ import { Label } from '@/app/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/app/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/app/components/ui/dialog';
 import { Badge } from '@/app/components/ui/badge';
-import { mockPacientes, mockCitas } from '@/app/data/mockData';
 import { useAuth } from '@/app/context/AuthContext';
+import { supabase } from '@/app/context/supabaseClient';
 import { Calendar, Clock, Plus, CheckCircle, History, LayoutDashboard } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -17,24 +17,177 @@ export function GestionCitas() {
   const [selectedPaciente, setSelectedPaciente] = useState('');
   const [fecha, setFecha] = useState('');
   const [hora, setHora] = useState('');
+  const [citas, setCitas] = useState<any[]>([]);
+  const [pacientes, setPacientes] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  const misPacientes = mockPacientes.filter(p => p.nutriologoId === user?.id);
-  const misCitas = mockCitas.filter(c => c.nutriologoId === user?.id);
+  useEffect(() => {
+    if (!user?.nutriologoId) {
+      setLoading(false);
+      toast.error('No se detectó ID de nutriólogo');
+      return;
+    }
 
-  const citasPendientes = misCitas.filter(c => c.estado === 'pendiente' || c.estado === 'confirmada');
-  const citasCompletadas = misCitas.filter(c => c.estado === 'completada');
+    const fetchData = async () => {
+      setLoading(true);
+      try {
+        const nutriologoId = Number(user.nutriologoId);
 
-  const handleSubmit = (e: React.FormEvent) => {
+        // Pacientes asignados
+        const { data: relaciones, error: errRel } = await supabase
+          .from('paciente_nutriologo')
+          .select('id_paciente')
+          .eq('id_nutriologo', nutriologoId)
+          .eq('activo', true);
+
+        if (errRel) throw errRel;
+
+        if (relaciones?.length) {
+          const pacienteIds = relaciones.map(r => r.id_paciente);
+
+          const { data: pacientesData, error: errPac } = await supabase
+            .from('pacientes')
+            .select('id_paciente, nombre, apellido')
+            .in('id_paciente', pacienteIds);
+
+          if (errPac) throw errPac;
+          setPacientes(pacientesData || []);
+        } else {
+          setPacientes([]);
+        }
+
+        // Citas con join a pacientes y pagos
+        const { data: citasData, error: errCitas } = await supabase
+          .from('citas')
+          .select(`
+            id_cita,
+            fecha_hora,
+            estado,
+            id_paciente,
+            pacientes!inner (nombre, apellido),
+            pagos!left (monto, estado)
+          `)
+          .eq('id_nutriologo', nutriologoId)
+          .order('fecha_hora', { ascending: false });
+
+        if (errCitas) throw errCitas;
+
+        const citasFormateadas = citasData?.map(c => ({
+          id: c.id_cita,
+          fecha: new Intl.DateTimeFormat('es-MX', { dateStyle: 'medium', timeZone: 'America/Tijuana' }).format(new Date(c.fecha_hora)),
+          hora: new Intl.DateTimeFormat('es-MX', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'America/Tijuana' }).format(new Date(c.fecha_hora)),
+          estado: c.estado,
+          pacienteNombre: `${c.pacientes?.nombre || ''} ${c.pacientes?.apellido || ''}`,
+          pagada: c.pagos?.some(p => p.estado === 'completado') || false,
+          monto: c.pagos?.[0]?.monto || 800
+        })) || [];
+
+        setCitas(citasFormateadas);
+      } catch (err: any) {
+        console.error('Error cargando citas/pacientes:', err);
+        toast.error('No se pudieron cargar las citas');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchData();
+  }, [user?.nutriologoId]);
+
+  const citasPendientes = citas.filter(c => c.estado === 'pendiente' || c.estado === 'confirmada');
+  const citasCompletadas = citas.filter(c => c.estado === 'completada');
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    toast.success('Cita agendada exitosamente. Se notificará al paciente.');
-    setIsDialogOpen(false);
-    setSelectedPaciente('');
-    setFecha('');
-    setHora('');
+
+    if (!selectedPaciente || !fecha || !hora) {
+      toast.error('Completa todos los campos para agendar la cita.');
+      return;
+    }
+
+    // Crear fecha en timezone local (Mexicali)
+    const fechaHoraLocal = new Date(`${fecha}T${hora}`);
+    const now = new Date();
+
+    if (fechaHoraLocal < now) {
+      toast.error('No se puede agendar citas en fechas pasadas. Por favor, selecciona una fecha y hora futuras.');
+      return;
+    }
+
+    try {
+      const nutriologoId = Number(user.nutriologoId);
+
+      // Convertir a UTC para guardar en Supabase
+      const fechaHoraUTC = fechaHoraLocal.toISOString();
+
+      const { error } = await supabase
+        .from('citas')
+        .insert({
+          id_paciente: Number(selectedPaciente),
+          id_nutriologo: nutriologoId,
+          fecha_hora: fechaHoraUTC,
+          estado: 'pendiente',
+          duracion_minutos: 60,
+          tipo_cita: 'presencial'
+        });
+
+      if (error) throw error;
+
+      toast.success('Cita agendada exitosamente. Se notificará al paciente.');
+
+      // Cerrar y limpiar
+      setIsDialogOpen(false);
+      setSelectedPaciente('');
+      setFecha('');
+      setHora('');
+
+      // Refrescar lista
+      const { data: nuevasCitas, error: errRefresh } = await supabase
+        .from('citas')
+        .select(`
+          id_cita,
+          fecha_hora,
+          estado,
+          id_paciente,
+          pacientes!inner (nombre, apellido),
+          pagos!left (monto, estado)
+        `)
+        .eq('id_nutriologo', nutriologoId)
+        .order('fecha_hora', { ascending: false });
+
+      if (!errRefresh) {
+        const formateadas = nuevasCitas?.map(c => ({
+          id: c.id_cita,
+          fecha: new Intl.DateTimeFormat('es-MX', { dateStyle: 'medium', timeZone: 'America/Tijuana' }).format(new Date(c.fecha_hora)),
+          hora: new Intl.DateTimeFormat('es-MX', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'America/Tijuana' }).format(new Date(c.fecha_hora)),
+          estado: c.estado,
+          pacienteNombre: `${c.pacientes?.nombre || ''} ${c.pacientes?.apellido || ''}`,
+          pagada: c.pagos?.some(p => p.estado === 'completado') || false,
+          monto: c.pagos?.[0]?.monto || 800
+        })) || [];
+        setCitas(formateadas);
+      }
+    } catch (err: any) {
+      console.error('Error al agendar cita:', err);
+      toast.error('Error al agendar la cita: ' + (err.message || 'Intenta de nuevo'));
+    }
   };
 
-  const marcarComoCompletada = (citaId: string) => {
-    toast.success('Cita marcada como completada');
+  const marcarComoCompletada = async (citaId: number) => {
+    try {
+      const { error } = await supabase
+        .from('citas')
+        .update({ estado: 'completada' })
+        .eq('id_cita', citaId);
+
+      if (error) throw error;
+
+      toast.success('Cita marcada como completada');
+      setCitas(prev => prev.map(c => c.id === citaId ? { ...c, estado: 'completada' } : c));
+    } catch (err: any) {
+      toast.error('Error al actualizar la cita');
+      console.error(err);
+    }
   };
 
   const getEstadoBadge = (estado: string) => {
@@ -51,6 +204,14 @@ export function GestionCitas() {
         return 'bg-gray-100 text-gray-700 border-gray-200';
     }
   };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen p-6 md:p-10 flex items-center justify-center bg-[#F8FFF9]">
+        <div className="text-[#2E8B57] font-bold text-xl animate-pulse">Cargando citas...</div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen p-6 md:p-10 font-sans bg-[#F8FFF9] space-y-10">
@@ -91,20 +252,15 @@ export function GestionCitas() {
                       <SelectValue placeholder="Selecciona un paciente" />
                     </SelectTrigger>
                     <SelectContent className="rounded-xl border-2 border-[#D1E8D5]">
-                      {misPacientes
-                        .filter(p => {
-                          const citasPagadas = misCitas.filter(c => c.pacienteId === p.id && c.pagada);
-                          return citasPagadas.length > 0;
-                        })
-                        .map((paciente) => (
-                          <SelectItem key={paciente.id} value={paciente.id} className="font-bold text-xs">
-                            {paciente.nombre} {paciente.apellido}
-                          </SelectItem>
-                        ))}
+                      {pacientes.map((p) => (
+                        <SelectItem key={p.id_paciente} value={p.id_paciente.toString()} className="font-bold text-xs">
+                          {p.nombre} {p.apellido}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                   <p className="text-[9px] font-bold text-gray-400 uppercase leading-tight mt-1">
-                    * Solo pacientes con suscripción activa/pagada
+                    * Solo pacientes asignados a ti
                   </p>
                 </div>
 
@@ -156,7 +312,7 @@ export function GestionCitas() {
           {[
             { label: 'Citas Activas', val: citasPendientes.length, icon: Calendar, color: 'text-blue-500' },
             { label: 'Completadas', val: citasCompletadas.length, icon: CheckCircle, color: 'text-[#2E8B57]' },
-            { label: 'Total del Mes', val: misCitas.length, icon: LayoutDashboard, color: 'text-purple-500' }
+            { label: 'Total del Mes', val: citas.length, icon: LayoutDashboard, color: 'text-purple-500' }
           ].map((stat, i) => (
             <div key={i} className="bg-white p-8 rounded-[2.5rem] border-2 border-[#D1E8D5] shadow-sm flex items-center justify-between">
               <div>
@@ -186,50 +342,47 @@ export function GestionCitas() {
                   <p className="text-xs font-black text-gray-400 uppercase tracking-widest">No hay citas pendientes</p>
                 </div>
               ) : (
-                citasPendientes.map((cita) => {
-                  const paciente = mockPacientes.find(p => p.id === cita.pacienteId);
-                  return (
-                    <div key={cita.id} className="flex flex-col md:flex-row md:items-center justify-between p-6 border-2 border-[#F0FFF4] rounded-[2rem] hover:border-[#2E8B57] transition-all bg-white group">
-                      <div className="flex items-center gap-5">
-                        <div className="h-14 w-14 bg-[#F0FFF4] rounded-2xl flex items-center justify-center border border-[#D1E8D5] group-hover:bg-[#2E8B57] transition-colors">
-                          <Calendar className="h-6 w-6 text-[#2E8B57] group-hover:text-white" />
-                        </div>
-                        <div>
-                          <p className="font-black text-[#1A3026] uppercase text-sm tracking-tight">
-                            {paciente?.nombre} {paciente?.apellido}
-                          </p>
-                          <div className="flex items-center gap-4 mt-1">
-                            <span className="flex items-center gap-1 text-[10px] font-bold text-gray-400 uppercase">
-                              <Calendar className="h-3 w-3 text-[#3CB371]" /> {cita.fecha}
-                            </span>
-                            <span className="flex items-center gap-1 text-[10px] font-bold text-gray-400 uppercase">
-                              <Clock className="h-3 w-3 text-[#3CB371]" /> {cita.hora}
-                            </span>
-                          </div>
-                        </div>
+                citasPendientes.map((cita) => (
+                  <div key={cita.id} className="flex flex-col md:flex-row md:items-center justify-between p-6 border-2 border-[#F0FFF4] rounded-[2rem] hover:border-[#2E8B57] transition-all bg-white group">
+                    <div className="flex items-center gap-5">
+                      <div className="h-14 w-14 bg-[#F0FFF4] rounded-2xl flex items-center justify-center border border-[#D1E8D5] group-hover:bg-[#2E8B57] transition-colors">
+                        <Calendar className="h-6 w-6 text-[#2E8B57] group-hover:text-white" />
                       </div>
-                      
-                      <div className="flex items-center gap-3 mt-4 md:mt-0">
-                        <Badge className={`${getEstadoBadge(cita.estado)} border-2 px-3 py-1 rounded-xl font-black text-[9px] uppercase shadow-none`}>
-                          {cita.estado}
-                        </Badge>
-                        <Badge className={`${cita.pagada ? 'bg-[#F0FFF4] text-[#2E8B57]' : 'bg-red-50 text-red-600'} border-2 px-3 py-1 rounded-xl font-black text-[9px] uppercase shadow-none`}>
-                          {cita.pagada ? 'PAGADA' : 'PENDIENTE PAGO'}
-                        </Badge>
-                        {cita.estado === 'confirmada' && (
-                          <Button 
-                            size="sm"
-                            onClick={() => marcarComoCompletada(cita.id)}
-                            className="bg-white border-2 border-[#2E8B57] text-[#2E8B57] hover:bg-[#2E8B57] hover:text-white font-black text-[9px] uppercase rounded-xl px-4 transition-all"
-                          >
-                            <CheckCircle className="h-3.5 w-3.5 mr-1" />
-                            Finalizar
-                          </Button>
-                        )}
+                      <div>
+                        <p className="font-black text-[#1A3026] uppercase text-sm tracking-tight">
+                          {cita.pacienteNombre}
+                        </p>
+                        <div className="flex items-center gap-4 mt-1">
+                          <span className="flex items-center gap-1 text-[10px] font-bold text-gray-400 uppercase">
+                            <Calendar className="h-3 w-3 text-[#3CB371]" /> {cita.fecha}
+                          </span>
+                          <span className="flex items-center gap-1 text-[10px] font-bold text-gray-400 uppercase">
+                            <Clock className="h-3 w-3 text-[#3CB371]" /> {cita.hora}
+                          </span>
+                        </div>
                       </div>
                     </div>
-                  );
-                })
+                    
+                    <div className="flex items-center gap-3 mt-4 md:mt-0">
+                      <Badge className={`${getEstadoBadge(cita.estado)} border-2 px-3 py-1 rounded-xl font-black text-[9px] uppercase shadow-none`}>
+                        {cita.estado}
+                      </Badge>
+                      <Badge className={`${cita.pagada ? 'bg-[#F0FFF4] text-[#2E8B57]' : 'bg-red-50 text-red-600'} border-2 px-3 py-1 rounded-xl font-black text-[9px] uppercase shadow-none`}>
+                        {cita.pagada ? 'PAGADA' : 'PENDIENTE PAGO'}
+                      </Badge>
+                      {cita.estado === 'confirmada' && (
+                        <Button 
+                          size="sm"
+                          onClick={() => marcarComoCompletada(cita.id)}
+                          className="bg-white border-2 border-[#2E8B57] text-[#2E8B57] hover:bg-[#2E8B57] hover:text-white font-black text-[9px] uppercase rounded-xl px-4 transition-all"
+                        >
+                          <CheckCircle className="h-3.5 w-3.5 mr-1" />
+                          Finalizar
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                ))
               )}
             </div>
           </CardContent>
@@ -245,32 +398,34 @@ export function GestionCitas() {
           </CardHeader>
           <CardContent className="p-6">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {citasCompletadas.map((cita) => {
-                const paciente = mockPacientes.find(p => p.id === cita.pacienteId);
-                return (
-                  <div key={cita.id} className="flex items-center justify-between p-5 bg-[#F8FFF9] border border-[#D1E8D5] rounded-2xl">
-                    <div className="flex items-center gap-4">
-                      <div className="h-10 w-10 bg-white rounded-xl flex items-center justify-center border border-[#D1E8D5]">
-                        <CheckCircle size={18} className="text-[#2E8B57]" />
-                      </div>
-                      <div>
-                        <p className="font-black text-[#1A3026] uppercase text-xs">
-                          {paciente?.nombre} {paciente?.apellido}
-                        </p>
-                        <p className="text-[9px] font-bold text-gray-400 uppercase">
-                          {cita.fecha} • {cita.hora}
-                        </p>
-                      </div>
+              {citasCompletadas.map((cita) => (
+                <div key={cita.id} className="flex items-center justify-between p-5 bg-[#F8FFF9] border border-[#D1E8D5] rounded-2xl">
+                  <div className="flex items-center gap-4">
+                    <div className="h-10 w-10 bg-white rounded-xl flex items-center justify-center border border-[#D1E8D5]">
+                      <CheckCircle size={18} className="text-[#2E8B57]" />
                     </div>
-                    <div className="text-right">
-                      <Badge variant="outline" className="border-2 border-[#D1E8D5] text-[#2E8B57] font-black text-[8px] uppercase px-2 py-0.5 rounded-lg mb-1">
-                        COMPLETADA
-                      </Badge>
-                      <p className="text-xs font-black text-[#1A3026] tracking-tight">${cita.monto}</p>
+                    <div>
+                      <p className="font-black text-[#1A3026] uppercase text-xs">
+                        {cita.pacienteNombre}
+                      </p>
+                      <p className="text-[9px] font-bold text-gray-400 uppercase">
+                        {cita.fecha} • {cita.hora}
+                      </p>
                     </div>
                   </div>
-                );
-              })}
+                  <div className="text-right">
+                    <Badge variant="outline" className="border-2 border-[#D1E8D5] text-[#2E8B57] font-black text-[8px] uppercase px-2 py-0.5 rounded-lg mb-1">
+                      COMPLETADA
+                    </Badge>
+                    <p className="text-xs font-black text-[#1A3026] tracking-tight">${cita.monto}</p>
+                  </div>
+                </div>
+              ))}
+              {citasCompletadas.length === 0 && (
+                <div className="col-span-2 text-center py-8 text-gray-500">
+                  No hay consultas completadas aún
+                </div>
+              )}
             </div>
           </CardContent>
         </Card>

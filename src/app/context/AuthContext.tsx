@@ -1,8 +1,11 @@
+// AuthContext.tsx (corregido)
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { supabase } from './supabaseClient';
 
 export interface User {
-  id: string;
+  id: string;  // UUID real de Supabase Auth
+  nutriologoId?: string;  // ID numérico de nutriologos (opcional)
+  adminId?: string;  // ID numérico de administradores (opcional)
   email: string;
   nombre: string;
   apellido: string;
@@ -22,7 +25,7 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-export function AuthProvider({ children }: { children: ReactNode }) {
+export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -86,7 +89,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (adminResult.data) {
         console.log('[fetchUserData] ADMINISTRADOR ENCONTRADO');
         setUser({
-          id: adminResult.data.id_admin.toString(),
+          id: userId,  // UUID real
+          adminId: adminResult.data.id_admin.toString(),
           email: adminResult.data.correo || '',
           nombre: adminResult.data.nombre || '',
           apellido: adminResult.data.apellido || '',
@@ -110,7 +114,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (nutriResult.data) {
         console.log('[fetchUserData] NUTRIÓLOGO ENCONTRADO');
         setUser({
-          id: nutriResult.data.id_nutriologo.toString(),
+          id: userId,  // UUID real
+          nutriologoId: nutriResult.data.id_nutriologo.toString(),
           email: nutriResult.data.correo || '',
           nombre: nutriResult.data.nombre || '',
           apellido: nutriResult.data.apellido || '',

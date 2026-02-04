@@ -1,39 +1,194 @@
+import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/app/components/ui/card';
 import { Users, Calendar, DollarSign, TrendingUp, CheckCircle2 } from 'lucide-react';
-import { mockPacientes, mockCitas, mockPagos } from '@/app/data/mockData';
 import { useAuth } from '@/app/context/AuthContext';
+import { supabase } from '@/app/context/supabaseClient';
+import { toast } from 'sonner';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 
 export function DashboardNutriologo() {
   const { user } = useAuth();
+  const [loading, setLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState('');
 
-  // Filtrar datos por nutriólogo
-  const misPacientes = mockPacientes.filter(p => p.nutriologoId === user?.id);
-  const misCitas = mockCitas.filter(c => c.nutriologoId === user?.id);
-  const misPagos = mockPagos.filter(p => p.nutriologoId === user?.id);
+  const [dashboardData, setDashboardData] = useState({
+    misPacientesCount: 0,
+    citasActivas: 0,
+    citasCompletadas: 0,
+    citasTotales: 0,
+    ingresosMes: 0,
+    proximasCitas: [],
+    citasPorEstado: [],
+    ingresosPorMes: [],
+  });
 
-  const citasActivas = misCitas.filter(c => c.estado === 'confirmada' || c.estado === 'pendiente').length;
-  const citasCompletadas = misCitas.filter(c => c.estado === 'completada').length;
-  const ingresosMes = misPagos
-    .filter(p => p.fecha.startsWith('2026-01'))
-    .reduce((sum, p) => sum + p.monto, 0);
+  useEffect(() => {
+    if (!user?.id || user?.rol !== 'nutriologo') {
+      setLoading(false);
+      setErrorMsg('No se detectó sesión de nutriólogo válida. Inicia sesión nuevamente.');
+      return;
+    }
 
-  // Configuración estética
-  const COLORS = ['#2E8B57', '#3CB371', '#D1E8D5']; // Gama de verdes del Perfil
+    console.log('[DashboardNutriologo] UUID del usuario logueado:', user.id);
+    fetchDashboardData();
+  }, [user]);
 
-  const citasPorEstado = [
-    { name: 'Confirmadas', value: misCitas.filter(c => c.estado === 'confirmada').length },
-    { name: 'Completadas', value: citasCompletadas },
-    { name: 'Pendientes', value: misCitas.filter(c => c.estado === 'pendiente').length }
-  ];
+  const fetchDashboardData = async () => {
+    setLoading(true);
+    setErrorMsg('');
+    try {
+      // 1. Obtener id_nutriologo desde id_auth_user (UUID)
+      const { data: nutriologo, error: errNut } = await supabase
+        .from('nutriologos')
+        .select('id_nutriologo, nombre')
+        .eq('id_auth_user', user.id)
+        .single();
 
-  const ingresosPorMes = [
-    { mes: 'Sep', ingresos: 2000 },
-    { mes: 'Oct', ingresos: 2500 },
-    { mes: 'Nov', ingresos: 3000 },
-    { mes: 'Dic', ingresos: 2800 },
-    { mes: 'Ene', ingresos: ingresosMes }
-  ];
+      if (errNut) {
+        console.error('[DashboardNutriologo] Error al buscar nutriólogo:', errNut);
+        throw new Error('Error al verificar tu perfil en la base de datos');
+      }
+
+      if (!nutriologo) {
+        throw new Error('No se encontró tu perfil de nutriólogo. Contacta al administrador para configurarlo.');
+      }
+
+      const nutriologoId = nutriologo.id_nutriologo;
+      console.log('[DashboardNutriologo] ID Nutriólogo encontrado:', nutriologoId);
+
+      // 2. Pacientes asignados
+      const { count: misPacientesCount, error: errPac } = await supabase
+        .from('paciente_nutriologo')
+        .select('count', { count: 'exact', head: true })
+        .eq('id_nutriologo', nutriologoId)
+        .eq('activo', true);
+
+      if (errPac) throw errPac;
+
+      // 3. Citas del nutriólogo
+      const { data: citas, error: errCitas } = await supabase
+        .from('citas')
+        .select('id_cita, fecha_hora, estado')
+        .eq('id_nutriologo', nutriologoId);
+
+      if (errCitas) throw errCitas;
+
+      const citasActivas = citas.filter(c => ['confirmada', 'pendiente'].includes(c.estado)).length;
+      const citasCompletadas = citas.filter(c => c.estado === 'completada').length;
+      const citasTotales = citas.length;
+
+      // 4. Ingresos mes actual
+      const now = new Date();
+      const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 19);
+      const currentMonthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59).toISOString().slice(0, 19);
+
+      const { data: pagosMesActual, error: errPagosActual } = await supabase
+        .from('pagos')
+        .select('monto')
+        .eq('id_nutriologo', nutriologoId)
+        .eq('estado', 'completado')
+        .gte('fecha_pago', currentMonthStart)
+        .lte('fecha_pago', currentMonthEnd);
+
+      if (errPagosActual) throw errPagosActual;
+
+      const ingresosMes = pagosMesActual?.reduce((sum, p) => sum + Number(p.monto || 0), 0) || 0;
+
+      // 5. Ingresos por mes (dinámico - últimos 6 meses)
+      const ingresosPorMes = [];
+      for (let i = 5; i >= 0; i--) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        const mesStart = d.toISOString().slice(0, 19);
+        const mesEnd = new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59).toISOString().slice(0, 19);
+        const nombreMes = d.toLocaleString('es-MX', { month: 'short' });
+        const mesDisplay = nombreMes.charAt(0).toUpperCase() + nombreMes.slice(1);
+
+        const { data: pagosMes, error: errPagosMes } = await supabase
+          .from('pagos')
+          .select('monto')
+          .eq('id_nutriologo', nutriologoId)
+          .eq('estado', 'completado')
+          .gte('fecha_pago', mesStart)
+          .lte('fecha_pago', mesEnd);
+
+        if (errPagosMes) {
+          ingresosPorMes.push({ mes: mesDisplay, ingresos: 0 });
+          continue;
+        }
+
+        const ingresos = pagosMes?.reduce((sum, p) => sum + Number(p.monto || 0), 0) || 0;
+        ingresosPorMes.push({ mes: mesDisplay, ingresos });
+      }
+
+      // 6. Próximas citas
+      const { data: proximasCitas, error: errProx } = await supabase
+        .from('citas')
+        .select(`
+          id_cita,
+          fecha_hora,
+          estado,
+          pacientes!inner (nombre, apellido)
+        `)
+        .eq('id_nutriologo', nutriologoId)
+        .in('estado', ['confirmada', 'pendiente'])
+        .gte('fecha_hora', new Date().toISOString())
+        .order('fecha_hora', { ascending: true })
+        .limit(6);
+
+      if (errProx) throw errProx;
+
+      // 7. Citas por estado para gráfica
+      const citasPorEstado = [
+        { name: 'Confirmadas', value: citas.filter(c => c.estado === 'confirmada').length },
+        { name: 'Completadas', value: citasCompletadas },
+        { name: 'Pendientes', value: citas.filter(c => c.estado === 'pendiente').length }
+      ];
+
+      setDashboardData({
+        misPacientesCount: misPacientesCount || 0,
+        citasActivas,
+        citasCompletadas,
+        citasTotales,
+        ingresosMes,
+        proximasCitas: proximasCitas || [],
+        citasPorEstado,
+        ingresosPorMes,
+      });
+
+      console.log('[DashboardNutriologo] Carga completada exitosamente');
+    } catch (err: any) {
+      console.error('Error cargando dashboard nutriólogo:', err);
+      toast.error('No se pudieron cargar las estadísticas');
+      setErrorMsg(err.message || 'Error desconocido');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const COLORS = ['#2E8B57', '#3CB371', '#D1E8D5'];
+
+  if (loading) {
+    return (
+      <div className="min-h-screen p-10 flex items-center justify-center">
+        <div className="text-[#2E8B57] font-bold text-xl animate-pulse">Cargando panel...</div>
+      </div>
+    );
+  }
+
+  if (errorMsg) {
+    return (
+      <div className="min-h-screen p-10 text-center text-red-600 flex flex-col items-center justify-center gap-4">
+        <p className="text-xl font-bold">Error</p>
+        <p>{errorMsg}</p>
+        <button 
+          onClick={fetchDashboardData}
+          className="px-6 py-3 bg-[#2E8B57] text-white rounded-xl hover:bg-[#256e45] transition-colors"
+        >
+          Reintentar
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen p-6 md:p-10 font-sans bg-[#F8FFF9] space-y-10">
@@ -49,18 +204,18 @@ export function DashboardNutriologo() {
               <div className="w-16 h-1.5 bg-[#3CB371] rounded-full mt-2" />
             </div>
             <p className="text-[#3CB371] font-bold text-sm mt-4 uppercase tracking-[2px]">
-              Bienvenido de nuevo, {user?.nombre}
+              Bienvenido de nuevo, {user?.nombre || 'Nutriólogo'}
             </p>
           </div>
         </div>
 
-        {/* Tarjetas de estadísticas con estilo Perfil */}
+        {/* Tarjetas de estadísticas */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           {[
-            { title: 'Mis Pacientes', val: misPacientes.length, desc: 'Pacientes activos', icon: Users, color: '#2E8B57' },
-            { title: 'Citas Activas', val: citasActivas, desc: `${citasCompletadas} completadas`, icon: Calendar, color: '#3CB371' },
-            { title: 'Ingresos Mes', val: `$${ingresosMes.toLocaleString()}`, desc: 'Enero 2026', icon: DollarSign, color: '#2E8B57' },
-            { title: 'Consultas Totales', val: misCitas.length, desc: 'Histórico global', icon: TrendingUp, color: '#3CB371' }
+            { title: 'Mis Pacientes', val: dashboardData.misPacientesCount, desc: 'Pacientes activos', icon: Users, color: '#2E8B57' },
+            { title: 'Citas Activas', val: dashboardData.citasActivas, desc: `${dashboardData.citasCompletadas} completadas`, icon: Calendar, color: '#3CB371' },
+            { title: 'Ingresos Mes', val: `$${dashboardData.ingresosMes.toLocaleString()}`, desc: 'Mes actual', icon: DollarSign, color: '#2E8B57' },
+            { title: 'Consultas Totales', val: dashboardData.citasTotales, desc: 'Histórico global', icon: TrendingUp, color: '#3CB371' }
           ].map((stat, i) => (
             <div key={i} className="bg-white p-6 rounded-[2rem] border-2 border-[#D1E8D5] shadow-sm hover:shadow-md transition-all">
               <div className="flex items-center justify-between mb-4">
@@ -73,7 +228,7 @@ export function DashboardNutriologo() {
           ))}
         </div>
 
-        {/* Gráficas con bordes redondeados y estilo visual */}
+        {/* Gráficas */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
           <div className="bg-white p-8 rounded-[2.5rem] border-2 border-[#D1E8D5] shadow-sm">
             <h3 className="text-lg font-black text-[#1A3026] uppercase tracking-[2px] mb-6 flex items-center gap-2">
@@ -81,7 +236,7 @@ export function DashboardNutriologo() {
             </h3>
             <div className="h-[300px] w-full">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={ingresosPorMes}>
+                <BarChart data={dashboardData.ingresosPorMes}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F0FFF4" />
                   <XAxis dataKey="mes" axisLine={false} tickLine={false} tick={{fill: '#1A3026', fontWeight: 'bold', fontSize: 12}} />
                   <YAxis axisLine={false} tickLine={false} tick={{fill: '#1A3026', fontWeight: 'bold', fontSize: 12}} />
@@ -100,7 +255,7 @@ export function DashboardNutriologo() {
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
                   <Pie
-                    data={citasPorEstado}
+                    data={dashboardData.citasPorEstado}
                     cx="50%"
                     cy="50%"
                     innerRadius={60}
@@ -108,7 +263,7 @@ export function DashboardNutriologo() {
                     paddingAngle={8}
                     dataKey="value"
                   >
-                    {citasPorEstado.map((entry, index) => (
+                    {dashboardData.citasPorEstado.map((entry, index) => (
                       <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} strokeWidth={0} />
                     ))}
                   </Pie>
@@ -116,7 +271,7 @@ export function DashboardNutriologo() {
                 </PieChart>
               </ResponsiveContainer>
               <div className="flex justify-center gap-4 mt-2">
-                {citasPorEstado.map((entry, i) => (
+                {dashboardData.citasPorEstado.map((entry, i) => (
                   <div key={i} className="flex items-center gap-2">
                     <div className="w-3 h-3 rounded-full" style={{backgroundColor: COLORS[i]}} />
                     <span className="text-[9px] font-black uppercase text-gray-500">{entry.name}</span>
@@ -127,39 +282,40 @@ export function DashboardNutriologo() {
           </div>
         </div>
 
-        {/* Próximas citas con estilo de lista de Perfil */}
+        {/* Próximas citas */}
         <div className="bg-white p-8 rounded-[2.5rem] border-2 border-[#D1E8D5] shadow-sm">
           <h3 className="text-lg font-black text-[#1A3026] uppercase tracking-[3px] mb-8">Próximas Citas</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {misCitas
-              .filter(c => c.estado === 'confirmada')
-              .slice(0, 6)
-              .map((cita) => {
-                const paciente = mockPacientes.find(p => p.id === cita.pacienteId);
-                return (
-                  <div key={cita.id} className="flex items-center justify-between p-5 bg-white border-2 border-[#F0FFF4] hover:border-[#D1E8D5] rounded-3xl transition-all">
-                    <div className="flex items-center gap-4">
-                      <div className="h-14 w-14 bg-[#F0FFF4] rounded-2xl flex items-center justify-center border border-[#D1E8D5]">
-                        <Users className="h-6 w-6 text-[#2E8B57]" />
-                      </div>
-                      <div>
-                        <p className="font-black text-[#1A3026] uppercase text-sm tracking-tight">
-                          {paciente?.nombre} {paciente?.apellido}
-                        </p>
-                        <p className="text-[11px] font-bold text-[#3CB371] uppercase tracking-tighter">
-                          {cita.fecha} • {cita.hora}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <p className="font-black text-[#2E8B57] text-lg">${cita.monto}</p>
-                      <span className={`text-[8px] font-black uppercase px-2 py-1 rounded-full ${cita.pagada ? 'bg-green-100 text-green-600' : 'bg-orange-100 text-orange-600'}`}>
-                        {cita.pagada ? 'Pagada' : 'Pendiente'}
-                      </span>
-                    </div>
+            {dashboardData.proximasCitas.map((cita) => (
+              <div key={cita.id_cita} className="flex items-center justify-between p-5 bg-white border-2 border-[#F0FFF4] hover:border-[#D1E8D5] rounded-3xl transition-all">
+                <div className="flex items-center gap-4">
+                  <div className="h-14 w-14 bg-[#F0FFF4] rounded-2xl flex items-center justify-center border border-[#D1E8D5]">
+                    <Users className="h-6 w-6 text-[#2E8B57]" />
                   </div>
-                );
-              })}
+                  <div>
+                    <p className="font-black text-[#1A3026] uppercase text-sm tracking-tight">
+                      {cita.pacientes?.nombre || 'Paciente'} {cita.pacientes?.apellido || ''}
+                    </p>
+                    <p className="text-[11px] font-bold text-[#3CB371] uppercase tracking-tighter">
+                      {new Date(cita.fecha_hora).toLocaleDateString('es-MX')} • {new Date(cita.fecha_hora).toLocaleTimeString('es-MX', {hour: '2-digit', minute:'2-digit'})}
+                    </p>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <p className="font-black text-[#2E8B57] text-lg">
+                    $800.00 {/* Puedes agregar join a pagos si necesitas monto real */}
+                  </p>
+                  <span className={`text-[8px] font-black uppercase px-2 py-1 rounded-full ${cita.estado === 'completada' ? 'bg-green-100 text-green-600' : 'bg-orange-100 text-orange-600'}`}>
+                    {cita.estado}
+                  </span>
+                </div>
+              </div>
+            ))}
+            {dashboardData.proximasCitas.length === 0 && (
+              <div className="col-span-2 text-center text-gray-500 py-8">
+                No hay citas próximas programadas
+              </div>
+            )}
           </div>
         </div>
       </div>

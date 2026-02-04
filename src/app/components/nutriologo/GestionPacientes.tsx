@@ -1,29 +1,109 @@
-import { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/app/components/ui/card';
 import { Button } from '@/app/components/ui/button';
 import { Input } from '@/app/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/app/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/app/components/ui/dialog';
 import { Badge } from '@/app/components/ui/badge';
-import { mockPacientes } from '@/app/data/mockData';
 import { useAuth } from '@/app/context/AuthContext';
+import { supabase } from '@/app/context/supabaseClient';
 import { Search, Award, TrendingUp, User, Activity } from 'lucide-react';
-
-// ELIMINAMOS LA IMPORTACIÓN DE useRouter Y next/navigation QUE DABA EL ERROR
+import { toast } from 'sonner';
 
 export function GestionPacientes() {
   const { user } = useAuth();
   const [searchTerm, setSearchTerm] = useState('');
+  const [pacientes, setPacientes] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
   const [selectedPaciente, setSelectedPaciente] = useState<any>(null);
 
-  const misPacientes = mockPacientes.filter(p => p.nutriologoId === user?.id);
-  const pacientesFiltrados = misPacientes.filter(p => 
+  useEffect(() => {
+    if (!user?.nutriologoId) {
+      setLoading(false);
+      toast.error('No se detectó ID de nutriólogo');
+      return;
+    }
+
+    const fetchPacientes = async () => {
+      setLoading(true);
+      try {
+        // 1. Obtener IDs de pacientes asignados
+        const { data: relaciones, error: errRel } = await supabase
+          .from('paciente_nutriologo')
+          .select('id_paciente')
+          .eq('id_nutriologo', Number(user.nutriologoId))
+          .eq('activo', true);
+
+        if (errRel) throw errRel;
+
+        if (!relaciones?.length) {
+          setPacientes([]);
+          setLoading(false);
+          return;
+        }
+
+        const pacienteIds = relaciones.map(r => r.id_paciente);
+
+        // 2. Obtener datos completos de pacientes + puntos
+        const { data: pacientesData, error: errPac } = await supabase
+          .from('pacientes')
+          .select(`
+            id_paciente,
+            nombre,
+            apellido,
+            correo,
+            fecha_nacimiento,
+            peso,
+            altura,
+            objetivo,
+            puntos_paciente!inner (puntos_totales)
+          `)
+          .in('id_paciente', pacienteIds);
+
+        if (errPac) throw errPac;
+
+        // 3. Calcular edad y formatear
+        const pacientesConEdad = pacientesData?.map(p => {
+          const nacimiento = new Date(p.fecha_nacimiento);
+          const hoy = new Date();
+          const edad = hoy.getFullYear() - nacimiento.getFullYear();
+          return {
+            id: p.id_paciente,
+            nombre: p.nombre,
+            apellido: p.apellido,
+            email: p.correo,
+            edad,
+            peso: p.peso || 0,
+            altura: p.altura || 0,
+            objetivo: p.objetivo || 'Sin objetivo definido',
+            puntos: p.puntos_paciente?.puntos_totales || 0,
+            // Simulamos calorías semanales (puedes conectar a registro_alimentos después)
+            caloriasConsumidas: [1800, 1900, 1750, 2000, 1850, 2100, 1950],
+            metaCalorias: 2000,
+            fechaRegistro: new Date().toLocaleDateString('es-MX')
+          };
+        }) || [];
+
+        setPacientes(pacientesConEdad);
+      } catch (err: any) {
+        console.error('Error cargando pacientes:', err);
+        toast.error('No se pudieron cargar los pacientes');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchPacientes();
+  }, [user?.nutriologoId]);
+
+  const pacientesFiltrados = pacientes.filter(p => 
     p.nombre.toLowerCase().includes(searchTerm.toLowerCase()) ||
     p.apellido.toLowerCase().includes(searchTerm.toLowerCase()) ||
     p.email.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   const calcularIMC = (peso: number, altura: number) => {
+    if (!altura || altura === 0) return 0;
     const imc = peso / Math.pow(altura / 100, 2);
     return imc.toFixed(1);
   };
@@ -34,6 +114,14 @@ export function GestionPacientes() {
     if (imc < 30) return { label: 'Sobrepeso', color: 'bg-yellow-100 text-yellow-700' };
     return { label: 'Obesidad', color: 'bg-red-100 text-red-700' };
   };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen p-6 md:p-10 flex items-center justify-center bg-[#F8FFF9]">
+        <div className="text-[#2E8B57] font-bold text-xl animate-pulse">Cargando pacientes...</div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen p-6 md:p-10 font-sans bg-[#F8FFF9] space-y-10">
@@ -57,7 +145,7 @@ export function GestionPacientes() {
         {/* Buscador Estilizado */}
         <div className="relative max-w-2xl">
           <Search className="absolute left-5 top-1/2 -translate-y-1/2 h-5 w-5 text-[#2E8B57]" />
-          <input
+          <Input
             placeholder="BUSCAR PACIENTE POR NOMBRE O EMAIL..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
@@ -150,7 +238,6 @@ export function GestionPacientes() {
                                     { label: 'Altura', val: `${paciente.altura} cm` },
                                     { label: 'IMC', val: calcularIMC(paciente.peso, paciente.altura) },
                                     { label: 'Objetivo', val: paciente.objetivo },
-                                    { label: 'Meta Calórica', val: `${paciente.metaCalorias} kcal` },
                                     { label: 'Puntos', val: paciente.puntos, isAward: true },
                                     { label: 'Registro', val: paciente.fechaRegistro },
                                   ].map((item, i) => (
@@ -198,6 +285,13 @@ export function GestionPacientes() {
                     </TableRow>
                   );
                 })}
+                {pacientesFiltrados.length === 0 && !loading && (
+                  <TableRow>
+                    <TableCell colSpan={8} className="text-center py-10 text-gray-500">
+                      No se encontraron pacientes asignados
+                    </TableCell>
+                  </TableRow>
+                )}
               </TableBody>
             </Table>
           </div>
