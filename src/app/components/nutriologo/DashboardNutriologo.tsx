@@ -6,6 +6,8 @@ import { supabase } from '@/app/context/supabaseClient';
 import { toast } from 'sonner';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 
+const COLORS = ['#2E8B57', '#3CB371', '#D1E8D5'];
+
 export function DashboardNutriologo() {
   const { user } = useAuth();
   const [loading, setLoading] = useState(true);
@@ -29,7 +31,9 @@ export function DashboardNutriologo() {
       return;
     }
 
-    console.log('[DashboardNutriologo] UUID del usuario logueado:', user.id);
+    console.log('[DashboardNutriologo] UUID del usuario logueado (auth):', user.id);
+    console.log('[DashboardNutriologo] ID Nutriólogo (tabla):', user.nutriologoId);
+
     fetchDashboardData();
   }, [user]);
 
@@ -41,7 +45,7 @@ export function DashboardNutriologo() {
       const { data: nutriologo, error: errNut } = await supabase
         .from('nutriologos')
         .select('id_nutriologo, nombre')
-        .eq('id_auth_user', user.id)
+        .eq('id_auth_user', user.id) // UUID de auth
         .single();
 
       if (errNut) {
@@ -69,7 +73,8 @@ export function DashboardNutriologo() {
       const { data: citas, error: errCitas } = await supabase
         .from('citas')
         .select('id_cita, fecha_hora, estado')
-        .eq('id_nutriologo', nutriologoId);
+        .eq('id_nutriologo', nutriologoId)
+        .order('fecha_hora', { ascending: false });
 
       if (errCitas) throw errCitas;
 
@@ -94,7 +99,7 @@ export function DashboardNutriologo() {
 
       const ingresosMes = pagosMesActual?.reduce((sum, p) => sum + Number(p.monto || 0), 0) || 0;
 
-      // 5. Ingresos por mes (dinámico - últimos 6 meses)
+      // 5. Ingresos por mes (últimos 6 meses)
       const ingresosPorMes = [];
       for (let i = 5; i >= 0; i--) {
         const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
@@ -164,8 +169,6 @@ export function DashboardNutriologo() {
       setLoading(false);
     }
   };
-
-  const COLORS = ['#2E8B57', '#3CB371', '#D1E8D5'];
 
   if (loading) {
     return (
@@ -287,7 +290,7 @@ export function DashboardNutriologo() {
           <h3 className="text-lg font-black text-[#1A3026] uppercase tracking-[3px] mb-8">Próximas Citas</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {dashboardData.proximasCitas.map((cita) => (
-              <div key={cita.id_cita} className="flex items-center justify-between p-5 bg-white border-2 border-[#F0FFF4] hover:border-[#D1E8D5] rounded-3xl transition-all">
+              <div key={cita.id_cita} className="flex items-center justify-between p-5 bg-white border-2 border-[#F0FFF4] hover:border-[#D1E8D5] rounded-3xl transition-all group">
                 <div className="flex items-center gap-4">
                   <div className="h-14 w-14 bg-[#F0FFF4] rounded-2xl flex items-center justify-center border border-[#D1E8D5]">
                     <Users className="h-6 w-6 text-[#2E8B57]" />

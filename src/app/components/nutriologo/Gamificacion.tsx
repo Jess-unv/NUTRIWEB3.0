@@ -1,13 +1,13 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/app/components/ui/card';
 import { Button } from '@/app/components/ui/button';
 import { Input } from '@/app/components/ui/input';
 import { Label } from '@/app/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/app/components/ui/select';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/app/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogDescription } from '@/app/components/ui/dialog';  // Agregado DialogDescription
 import { Progress } from '@/app/components/ui/progress';
-import { mockPacientes } from '@/app/data/mockData';
 import { useAuth } from '@/app/context/AuthContext';
+import { supabase } from '@/app/context/supabaseClient';
 import { Award, TrendingUp, Plus, Trophy, Star, Target, Crown } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -16,18 +16,118 @@ export function Gamificacion() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [selectedPaciente, setSelectedPaciente] = useState('');
   const [puntosAsignar, setPuntosAsignar] = useState('');
+  const [misPacientes, setMisPacientes] = useState([]);
+  const [loading, setLoading] = useState(true);
 
-  const misPacientes = mockPacientes.filter(p => p.nutriologoId === user?.id);
-  const pacientesOrdenados = [...misPacientes].sort((a, b) => b.puntos - a.puntos);
+  useEffect(() => {
+    if (user?.nutriologoId) {
+      fetchMisPacientes();
+    }
+  }, [user]);
 
-  const handleAsignarPuntos = (e: React.FormEvent) => {
-    e.preventDefault();
-    const paciente = misPacientes.find(p => p.id === selectedPaciente);
-    toast.success(`${puntosAsignar} puntos asignados a ${paciente?.nombre}`);
-    setIsDialogOpen(false);
-    setSelectedPaciente('');
-    setPuntosAsignar('');
+  const fetchMisPacientes = async () => {
+    setLoading(true);
+    try {
+      const { data: relaciones, error: errRel } = await supabase
+        .from('paciente_nutriologo')
+        .select('id_paciente')
+        .eq('id_nutriologo', user.nutriologoId)
+        .eq('activo', true);
+
+      if (errRel) throw errRel;
+
+      const pacienteIds = relaciones.map(r => r.id_paciente);
+
+      if (pacienteIds.length === 0) {
+        setMisPacientes([]);
+        return;
+      }
+
+      const { data: pacientes, error: errPac } = await supabase
+        .from('pacientes')
+        .select('id_paciente, nombre, apellido')
+        .in('id_paciente', pacienteIds);
+
+      if (errPac) throw errPac;
+
+      const { data: puntos, error: errPuntos } = await supabase
+        .from('puntos_paciente')
+        .select('id_paciente, puntos_totales')
+        .in('id_paciente', pacienteIds);
+
+      if (errPuntos) throw errPuntos;
+
+      const pacientesConPuntos = pacientes.map(p => ({
+        id: p.id_paciente,
+        nombre: p.nombre,
+        apellido: p.apellido,
+        puntos: puntos.find(pt => pt.id_paciente === p.id_paciente)?.puntos_totales || 0,
+      }));
+
+      setMisPacientes(pacientesConPuntos);
+
+    } catch (error) {
+      console.error('[Gamificacion] Error cargando pacientes:', error.message);
+      toast.error('No se pudieron cargar los pacientes');
+    } finally {
+      setLoading(false);
+    }
   };
+
+  const handleAsignarPuntos = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const puntosNum = parseInt(puntosAsignar);
+      if (isNaN(puntosNum) || puntosNum <= 0) {
+        toast.error('Ingresa una cantidad válida de puntos');
+        return;
+      }
+
+      const pacienteId = parseInt(selectedPaciente);
+
+      // Update puntos_paciente
+      const { data: puntosData, error: errFetch } = await supabase
+        .from('puntos_paciente')
+        .select('puntos_totales')
+        .eq('id_paciente', pacienteId)
+        .single();
+
+      if (errFetch) throw errFetch;
+
+      const nuevosPuntos = (puntosData?.puntos_totales || 0) + puntosNum;
+
+      const { error: errUpdate } = await supabase
+        .from('puntos_paciente')
+        .update({ puntos_totales: nuevosPuntos })
+        .eq('id_paciente', pacienteId);
+
+      if (errUpdate) throw errUpdate;
+
+      // Log en log_puntos
+      const { error: errLog } = await supabase
+        .from('log_puntos')
+        .insert({
+          id_paciente: pacienteId,
+          puntos: puntosNum,
+          tipo_accion: 'cita',
+          descripcion: 'Puntos asignados por nutriólogo',
+        });
+
+      if (errLog) throw errLog;
+
+      toast.success(`${puntosNum} puntos asignados correctamente`);
+      setIsDialogOpen(false);
+      setSelectedPaciente('');
+      setPuntosAsignar('');
+      fetchMisPacientes(); // Refresh lista
+
+    } catch (error) {
+      console.error('[Gamificacion] Error asignando puntos:', error.message);
+      toast.error('No se pudieron asignar los puntos');
+    }
+  };
+
+  const pacientesOrdenados = [...misPacientes].sort((a, b) => b.puntos - a.puntos);
 
   const getNivelPaciente = (puntos: number) => {
     if (puntos >= 300) return { nivel: 'Oro', color: 'text-yellow-600', border: 'border-yellow-200', bgColor: 'bg-yellow-50', icon: Crown };
@@ -42,6 +142,16 @@ export function Gamificacion() {
     if (puntos >= 100) return ((puntos - 100) / 100) * 100;
     return (puntos / 100) * 100;
   };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#F8FFF9]">
+        <div className="text-[#2E8B57] font-bold text-2xl animate-pulse">
+          Cargando gamificación...
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen p-4 md:p-10 font-sans bg-[#F8FFF9] space-y-10">
@@ -71,6 +181,9 @@ export function Gamificacion() {
             <DialogContent className="rounded-[2.5rem] border-2 border-[#D1E8D5] p-8">
               <DialogHeader>
                 <DialogTitle className="text-xl font-[900] text-[#2E8B57] uppercase tracking-wider">Premia el esfuerzo</DialogTitle>
+                <DialogDescription>  {/* Agregado para eliminar el warning de accesibilidad */}
+                  Asigna puntos a tus pacientes para motivar su progreso.
+                </DialogDescription>
               </DialogHeader>
               <form onSubmit={handleAsignarPuntos} className="space-y-6 mt-4">
                 <div className="space-y-2">
@@ -169,10 +282,15 @@ export function Gamificacion() {
                   </div>
                 );
               })}
+              {pacientesOrdenados.length === 0 && (
+                <div className="text-center py-8 text-gray-500">
+                  No hay pacientes asignados aún
+                </div>
+              )}
             </CardContent>
           </Card>
 
-          {/* Metas y Rendimiento */}
+          {/* Metas y Rendimiento - Simplificado a base en puntos (ya que calorias no existe en DB) */}
           <Card className="rounded-[2.5rem] border-2 border-[#D1E8D5] overflow-hidden bg-white shadow-sm">
             <CardHeader className="bg-[#F8FFF9] border-b border-[#D1E8D5] p-8">
               <CardTitle className="text-sm font-[900] text-[#1A3026] uppercase tracking-[2px] flex items-center gap-2">
@@ -181,16 +299,14 @@ export function Gamificacion() {
             </CardHeader>
             <CardContent className="p-8 space-y-8">
               {misPacientes.map((paciente) => {
-                const promedio = paciente.caloriasConsumidas.reduce((a, b) => a + b, 0) / 7;
-                const cumplimiento = (promedio / paciente.metaCalorias) * 100;
-                const esExitoso = cumplimiento >= 90 && cumplimiento <= 110;
-
+                const cumplimiento = (paciente.puntos / 300) * 100;  // Ejemplo basado en puntos (ajusta a tu lógica real)
+                const esExitoso = cumplimiento >= 90;
                 return (
                   <div key={paciente.id} className="space-y-3">
                     <div className="flex items-center justify-between">
                       <div>
                         <p className="font-black text-[#1A3026] uppercase text-xs">{paciente.nombre}</p>
-                        <p className="text-[10px] font-bold text-gray-400 tracking-tight">META: {paciente.metaCalorias} KCAL</p>
+                        <p className="text-[10px] font-bold text-gray-400 tracking-tight">META: 300 PTS</p>
                       </div>
                       <div className={`px-4 py-2 rounded-xl border-2 font-black text-[10px] uppercase shadow-sm ${
                         esExitoso ? 'bg-[#F0FFF4] border-[#D1E8D5] text-[#2E8B57]' : 'bg-orange-50 border-orange-100 text-orange-600'
@@ -205,6 +321,11 @@ export function Gamificacion() {
                   </div>
                 );
               })}
+              {misPacientes.length === 0 && (
+                <div className="p-12 text-center text-gray-500">
+                  No hay pacientes registrados aún
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>

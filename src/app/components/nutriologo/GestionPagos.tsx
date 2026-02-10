@@ -23,6 +23,9 @@ export function GestionPagos() {
       return;
     }
 
+    console.log('[GestionPagos] Nutriólogo ID (integer):', user.nutriologoId);
+    console.log('[GestionPagos] Auth UUID:', user.id);
+
     const fetchPagos = async () => {
       setLoading(true);
       try {
@@ -38,7 +41,7 @@ export function GestionPagos() {
             pacientes!inner (nombre, apellido, correo),
             pagos!left (monto, estado)
           `)
-          .eq('id_nutriologo', nutriologoId)
+          .eq('id_nutriologo', nutriologoId) // integer correcto
           .order('fecha_hora', { ascending: false });
 
         if (errCitas) throw errCitas;

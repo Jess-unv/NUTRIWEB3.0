@@ -24,10 +24,13 @@ export function GestionPacientes() {
       return;
     }
 
+    console.log('[GestionPacientes] Nutriólogo ID (integer):', user.nutriologoId);
+    console.log('[GestionPacientes] Auth UUID:', user.id);
+
     const fetchPacientes = async () => {
       setLoading(true);
       try {
-        // 1. Obtener IDs de pacientes asignados
+        // 1. Obtener IDs de pacientes asignados (usa nutriologoId integer)
         const { data: relaciones, error: errRel } = await supabase
           .from('paciente_nutriologo')
           .select('id_paciente')
@@ -205,7 +208,7 @@ export function GestionPacientes() {
                       <TableCell>
                         <div className="flex items-center gap-1.5">
                           <div className="bg-yellow-50 p-1.5 rounded-lg border border-yellow-100">
-                            <Award className="h-3.5 w-3.5 text-yellow-600" />
+                            <Award className="h-3.5 w-3.5 text-yellow-500" />
                           </div>
                           <span className="font-black text-[#1A3026] text-sm">{paciente.puntos}</span>
                         </div>

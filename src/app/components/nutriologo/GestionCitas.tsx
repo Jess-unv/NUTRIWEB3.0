@@ -28,6 +28,9 @@ export function GestionCitas() {
       return;
     }
 
+    console.log('[GestionCitas] Nutriólogo ID (integer):', user.nutriologoId);
+    console.log('[GestionCitas] Auth UUID:', user.id);
+
     const fetchData = async () => {
       setLoading(true);
       try {
@@ -37,7 +40,7 @@ export function GestionCitas() {
         const { data: relaciones, error: errRel } = await supabase
           .from('paciente_nutriologo')
           .select('id_paciente')
-          .eq('id_nutriologo', nutriologoId)
+          .eq('id_nutriologo', nutriologoId) // integer
           .eq('activo', true);
 
         if (errRel) throw errRel;
@@ -67,7 +70,7 @@ export function GestionCitas() {
             pacientes!inner (nombre, apellido),
             pagos!left (monto, estado)
           `)
-          .eq('id_nutriologo', nutriologoId)
+          .eq('id_nutriologo', nutriologoId) // integer
           .order('fecha_hora', { ascending: false });
 
         if (errCitas) throw errCitas;
@@ -124,7 +127,7 @@ export function GestionCitas() {
         .from('citas')
         .insert({
           id_paciente: Number(selectedPaciente),
-          id_nutriologo: nutriologoId,
+          id_nutriologo: nutriologoId, // integer
           fecha_hora: fechaHoraUTC,
           estado: 'pendiente',
           duracion_minutos: 60,
@@ -152,7 +155,7 @@ export function GestionCitas() {
           pacientes!inner (nombre, apellido),
           pagos!left (monto, estado)
         `)
-        .eq('id_nutriologo', nutriologoId)
+        .eq('id_nutriologo', nutriologoId) // integer
         .order('fecha_hora', { ascending: false });
 
       if (!errRefresh) {

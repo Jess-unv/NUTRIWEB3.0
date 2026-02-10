@@ -22,7 +22,8 @@ function AppContent() {
   const { user, loading } = useAuth();
   const [activeTab, setActiveTab] = useState('dashboard');
 
-  console.log('[AppContent] Estado actual - loading:', loading, 'user:', user);
+  // Log principal para depurar en cada render
+  console.log('[AppContent] Estado actual - loading:', loading, 'user:', user ? user : 'null');
 
   if (loading) {
     return (
@@ -35,6 +36,7 @@ function AppContent() {
   }
 
   if (!user) {
+    console.log('[AppContent] No hay usuario → mostrando Login');
     return <Login />;
   }
 
@@ -43,9 +45,8 @@ function AppContent() {
     console.error('[AppContent] User existe pero rol es undefined:', user);
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#F0FFF4]">
-        <div className="text-red-600 font-bold text-2xl">
-          Error: Sesión restaurada pero rol no detectado.  
-          <br />
+        <div className="text-red-600 font-bold text-2xl text-center">
+          Error: Sesión restaurada pero rol no detectado.<br />
           Cierra sesión y vuelve a entrar.
         </div>
       </div>
@@ -57,21 +58,33 @@ function AppContent() {
   const renderContent = () => {
     if (user.rol === 'admin') {
       switch (activeTab) {
-        case 'dashboard': return <DashboardAdmin />;
-        case 'nutriologos': return <GestionNutriologos />;
-        case 'estadisticas': return <EstadisticasAdmin />;
-        default: return <DashboardAdmin />;
+        case 'dashboard':
+          return <DashboardAdmin />;
+        case 'nutriologos':
+          return <GestionNutriologos />;
+        case 'estadisticas':
+          return <EstadisticasAdmin />;
+        default:
+          return <DashboardAdmin />;
       }
     } else if (user.rol === 'nutriologo') {
       switch (activeTab) {
-        case 'dashboard': return <DashboardNutriologo />;
-        case 'pacientes': return <GestionPacientes />;
-        case 'citas': return <GestionCitas />;
-        case 'dietas': return <GestionDietas />;
-        case 'pagos': return <GestionPagos />;
-        case 'gamificacion': return <Gamificacion />;
-        case 'perfil': return <Perfil />;
-        default: return <DashboardNutriologo />;
+        case 'dashboard':
+          return <DashboardNutriologo />;
+        case 'pacientes':
+          return <GestionPacientes />;
+        case 'citas':
+          return <GestionCitas />;
+        case 'dietas':
+          return <GestionDietas />;
+        case 'pagos':
+          return <GestionPagos />;
+        case 'gamificacion':
+          return <Gamificacion />;
+        case 'perfil':
+          return <Perfil />;
+        default:
+          return <DashboardNutriologo />;
       }
     } else {
       return (

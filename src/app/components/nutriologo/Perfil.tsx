@@ -11,13 +11,14 @@ import {
   FileText
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { supabase } from '@/app/context/supabaseClient';
+import { Clock } from 'lucide-react';
 
 export function Perfil() {
   const { user, updateProfile } = useAuth();
   const [isEditing, setIsEditing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   
-  // 1. Estado con los campos que pediste
   const [formData, setFormData] = useState({
     nombre: user?.nombre || '',
     apellido: user?.apellido || '',
@@ -28,8 +29,9 @@ export function Perfil() {
   });
 
   const [previewImage, setPreviewImage] = useState<string | null>(user?.fotoPerfil || null);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
 
-  // --- 2. LÓGICA DE DETECCIÓN DE CAMBIOS ---
+  // Detectar cambios
   const hasChanges = JSON.stringify(formData) !== JSON.stringify({
     nombre: user?.nombre || '',
     apellido: user?.apellido || '',
@@ -39,9 +41,8 @@ export function Perfil() {
     fotoPerfil: user?.fotoPerfil || null
   });
 
-  // --- 3. BLOQUEO DE NAVEGACIÓN (COMPATIBLE CON VITE) ---
+  // Bloqueo de navegación (tu código original intacto)
   useEffect(() => {
-    // A. Bloquear recarga de página o cerrar pestaña
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
       if (isEditing && hasChanges) {
         e.preventDefault();
@@ -49,10 +50,9 @@ export function Perfil() {
       }
     };
 
-    // B. Bloquear clics en enlaces del menú/navegación
     const handleInternalNavigation = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
-      const anchor = target.closest('a'); // Busca si el clic fue en un link
+      const anchor = target.closest('a');
 
       if (anchor && isEditing && hasChanges) {
         const confirmación = window.confirm("Tienes cambios sin guardar. ¿Estás seguro de que quieres salir?");
@@ -72,20 +72,42 @@ export function Perfil() {
     };
   }, [isEditing, hasChanges]);
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      if (file.size > 2 * 1024 * 1024) {
-        toast.error("La imagen es muy pesada. Máximo 2MB");
-        return;
-      }
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const base64String = reader.result as string;
-        setPreviewImage(base64String);
-        setFormData(prev => ({ ...prev, fotoPerfil: base64String }));
-      };
-      reader.readAsDataURL(file);
+    if (!file) return;
+
+    if (file.size > 2 * 1024 * 1024) {
+      toast.error("La imagen es muy pesada. Máximo 2MB");
+      return;
+    }
+
+    setUploadingPhoto(true);
+
+    try {
+      const fileExt = file.name.split('.').pop();
+      const fileName = `${user?.id}-${Date.now()}.${fileExt}`;
+      const filePath = `perfiles/${fileName}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from('perfiles')
+        .upload(filePath, file);
+
+      if (uploadError) throw uploadError;
+
+      const { data: publicUrl } = supabase.storage
+        .from('perfiles')
+        .getPublicUrl(filePath);
+
+      const imageUrl = publicUrl.publicUrl;
+
+      setPreviewImage(imageUrl);
+      setFormData(prev => ({ ...prev, fotoPerfil: imageUrl }));
+      toast.success('Foto subida correctamente');
+    } catch (err: any) {
+      console.error('Error subiendo foto:', err);
+      toast.error('Error al subir la foto');
+    } finally {
+      setUploadingPhoto(false);
     }
   };
 
@@ -97,16 +119,30 @@ export function Perfil() {
       return;
     }
 
+    if (formData.tarifa <= 0) {
+      toast.error("La tarifa debe ser un número mayor a 0");
+      return;
+    }
+
     if (formData.tarifa < 1000) {
       toast.error("La tarifa mínima es de $1,000");
       return;
     }
 
     try {
-      await updateProfile(formData);
+      await updateProfile({
+        nombre: formData.nombre,
+        apellido: formData.apellido,
+        tarifa: formData.tarifa,
+        descripcion: formData.descripcion,
+        fotoPerfil: formData.fotoPerfil,
+        nombreUsuario: formData.nombreUsuario
+      });
+
       toast.success('Perfil actualizado correctamente');
       setIsEditing(false);
-    } catch (error) {
+    } catch (error: any) {
+      console.error('Error al guardar perfil:', error);
       toast.error('Error al guardar cambios');
     }
   };
@@ -144,7 +180,7 @@ export function Perfil() {
           {!isEditing && (
             <button 
               onClick={() => setIsEditing(true)}
-              className="flex items-center gap-2 px-8 py-4 bg-white border-2 border-[#D1E8D5] text-[#2E8B57] font-black text-xs uppercase tracking-[2px] rounded-2xl hover:bg-[#F0FFF4] transition-all"
+              className="flex items-center gap-2 px-8 py-4 bg-white border-2 border-[#D1E8D5] text-[#2E8B57] font-black text-xs uppercase tracking-widest rounded-2xl hover:bg-[#F0FFF4] transition-all"
             >
               <Edit size={16} />
               Editar Información
@@ -168,9 +204,10 @@ export function Perfil() {
                   <button 
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
-                    className="absolute bottom-0 right-0 p-3 bg-[#2E8B57] text-white rounded-full shadow-lg border-4 border-white"
+                    disabled={uploadingPhoto}
+                    className="absolute bottom-0 right-0 p-3 bg-[#2E8B57] text-white rounded-full shadow-lg border-4 border-white disabled:opacity-50"
                   >
-                    <Camera size={18} />
+                    {uploadingPhoto ? <Clock size={18} className="animate-spin" /> : <Camera size={18} />}
                   </button>
                 )}
                 <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="image/*" className="hidden" />
@@ -231,12 +268,23 @@ export function Perfil() {
                     <div className="relative">
                       <DollarSign className="absolute left-4 top-1/2 -translate-y-1/2 text-[#2E8B57]" size={18} />
                       <input
-                        type="number"
                         disabled={!isEditing}
-                        value={formData.tarifa}
-                        onChange={(e) => setFormData({...formData, tarifa: Number(e.target.value)})}
-                        className="w-full mt-2 pl-12 pr-4 py-4 bg-white border-2 border-[#D1E8D5] rounded-2xl focus:border-[#2E8B57] outline-none disabled:opacity-50"
+                        type="text"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        value={formData.tarifa === 0 && !isEditing ? '' : formData.tarifa}
+                        onChange={(e) => {
+                          const value = e.target.value.replace(/[^0-9]/g, ''); // solo números
+                          const numValue = value === '' ? 0 : Number(value);
+                          setFormData({...formData, tarifa: numValue});
+                        }}
+                        placeholder="Ej: 1500"
+                        className={`w-full mt-2 pl-12 pr-4 py-4 bg-white border-2 border-[#D1E8D5] rounded-2xl focus:border-[#2E8B57] outline-none disabled:opacity-50 font-medium
+                          ${formData.tarifa < 1000 && isEditing ? 'border-red-400 focus:border-red-500' : ''}`}
                       />
+                      {formData.tarifa < 1000 && isEditing && (
+                        <p className="text-[9px] text-red-500 mt-1">Mínimo $1,000</p>
+                      )}
                     </div>
                   </div>
                 </div>
