@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/app/components/ui/ca
 import { Button } from '@/app/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/app/components/ui/table';
 import { Badge } from '@/app/components/ui/badge';
-import { useAuth } from '@/app/context/AuthContext';
+import { useAuth } from '@/app/context/useAuth';
 import { supabase } from '@/app/context/supabaseClient';
 import { DollarSign, Download, TrendingUp, CreditCard, CheckCircle, Clock } from 'lucide-react';
 import { toast } from 'sonner';

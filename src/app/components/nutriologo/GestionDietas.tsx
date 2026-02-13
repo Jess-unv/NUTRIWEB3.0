@@ -6,7 +6,7 @@ import { Label } from '@/app/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/app/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/app/components/ui/dialog';
 import { mockPacientes, mockDietas } from '@/app/data/mockData';
-import { useAuth } from '@/app/context/AuthContext';
+import { useAuth } from '@/app/context/useAuth';
 import { FileText, Download, Plus, Utensils, Coffee, Sun, Apple, Moon, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
 

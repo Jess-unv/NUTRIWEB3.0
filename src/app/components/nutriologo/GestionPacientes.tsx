@@ -5,7 +5,7 @@ import { Input } from '@/app/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/app/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/app/components/ui/dialog';
 import { Badge } from '@/app/components/ui/badge';
-import { useAuth } from '@/app/context/AuthContext';
+import { useAuth } from '@/app/context/useAuth';
 import { supabase } from '@/app/context/supabaseClient';
 import { Search, Award, TrendingUp, User, Activity } from 'lucide-react';
 import { toast } from 'sonner';

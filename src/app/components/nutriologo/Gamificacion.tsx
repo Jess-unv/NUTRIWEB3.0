@@ -4,9 +4,9 @@ import { Button } from '@/app/components/ui/button';
 import { Input } from '@/app/components/ui/input';
 import { Label } from '@/app/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/app/components/ui/select';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogDescription } from '@/app/components/ui/dialog';  // Agregado DialogDescription
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogDescription } from '@/app/components/ui/dialog';
 import { Progress } from '@/app/components/ui/progress';
-import { useAuth } from '@/app/context/AuthContext';
+import { useAuth } from '@/app/context/useAuth';
 import { supabase } from '@/app/context/supabaseClient';
 import { Award, TrendingUp, Plus, Trophy, Star, Target, Crown } from 'lucide-react';
 import { toast } from 'sonner';
@@ -17,6 +17,8 @@ export function Gamificacion() {
   const [selectedPaciente, setSelectedPaciente] = useState('');
   const [puntosAsignar, setPuntosAsignar] = useState('');
   const [misPacientes, setMisPacientes] = useState([]);
+  const [filteredPacientes, setFilteredPacientes] = useState([]); // Lista filtrada por búsqueda
+  const [searchQuery, setSearchQuery] = useState(''); // Texto de búsqueda
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -40,12 +42,13 @@ export function Gamificacion() {
 
       if (pacienteIds.length === 0) {
         setMisPacientes([]);
+        setFilteredPacientes([]);
         return;
       }
 
       const { data: pacientes, error: errPac } = await supabase
         .from('pacientes')
-        .select('id_paciente, nombre, apellido')
+        .select('id_paciente, nombre, apellido, correo') // Agregamos correo para búsqueda
         .in('id_paciente', pacienteIds);
 
       if (errPac) throw errPac;
@@ -61,16 +64,53 @@ export function Gamificacion() {
         id: p.id_paciente,
         nombre: p.nombre,
         apellido: p.apellido,
+        correo: p.correo,
         puntos: puntos.find(pt => pt.id_paciente === p.id_paciente)?.puntos_totales || 0,
       }));
 
       setMisPacientes(pacientesConPuntos);
+      setFilteredPacientes(pacientesConPuntos); // Inicialmente todos
 
     } catch (error) {
       console.error('[Gamificacion] Error cargando pacientes:', error.message);
       toast.error('No se pudieron cargar los pacientes');
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Función para filtrar pacientes según la búsqueda
+  const handleSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const query = e.target.value.toLowerCase().trim();
+    setSearchQuery(query);
+
+    if (!query) {
+      setFilteredPacientes(misPacientes);
+      return;
+    }
+
+    const filtered = misPacientes.filter(paciente =>
+      paciente.nombre.toLowerCase().includes(query) ||
+      paciente.apellido.toLowerCase().includes(query) ||
+      paciente.correo.toLowerCase().includes(query)
+    );
+
+    setFilteredPacientes(filtered);
+  };
+
+  // Nueva función para manejar Enter en búsqueda
+  const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (filteredPacientes.length === 1) {
+        const unicoPaciente = filteredPacientes[0];
+        setSelectedPaciente(unicoPaciente.id.toString());
+        toast.success(`Paciente seleccionado automáticamente: ${unicoPaciente.nombre} ${unicoPaciente.apellido}`);
+      } else if (filteredPacientes.length > 1) {
+        toast.info('Varios pacientes encontrados. Por favor selecciona uno del menú.');
+      } else {
+        toast.warning('No se encontró ningún paciente con esa búsqueda.');
+      }
     }
   };
 
@@ -119,6 +159,7 @@ export function Gamificacion() {
       setIsDialogOpen(false);
       setSelectedPaciente('');
       setPuntosAsignar('');
+      setSearchQuery('');
       fetchMisPacientes(); // Refresh lista
 
     } catch (error) {
@@ -178,49 +219,101 @@ export function Gamificacion() {
                 Asignar Puntos
               </Button>
             </DialogTrigger>
-            <DialogContent className="rounded-[2.5rem] border-2 border-[#D1E8D5] p-8">
+            <DialogContent className="rounded-[2.5rem] border-2 border-[#D1E8D5] p-8 max-w-lg">
               <DialogHeader>
-                <DialogTitle className="text-xl font-[900] text-[#2E8B57] uppercase tracking-wider">Premia el esfuerzo</DialogTitle>
-                <DialogDescription>  {/* Agregado para eliminar el warning de accesibilidad */}
-                  Asigna puntos a tus pacientes para motivar su progreso.
+                <DialogTitle className="text-xl font-[900] text-[#2E8B57] uppercase tracking-wider">
+                  Premia el esfuerzo
+                </DialogTitle>
+                <DialogDescription>
+                  Asigna puntos a tus pacientes para motivar su progreso y recompensar su constancia.
                 </DialogDescription>
               </DialogHeader>
-              <form onSubmit={handleAsignarPuntos} className="space-y-6 mt-4">
+              <form onSubmit={handleAsignarPuntos} className="space-y-6 mt-6">
+                {/* Campo de búsqueda */}
                 <div className="space-y-2">
-                  <Label className="text-[10px] font-black uppercase text-gray-400 tracking-wider">Paciente</Label>
+                  <Label className="text-[10px] font-black uppercase text-gray-400 tracking-wider">
+                    Buscar Paciente
+                  </Label>
+                  <Input
+                    placeholder="Nombre, apellido o correo..."
+                    value={searchQuery}
+                    onChange={handleSearch}
+                    onKeyDown={handleSearchKeyDown} // Agregado onKeyDown para Enter
+                    className="border-2 border-[#D1E8D5] rounded-xl h-12 font-bold focus:ring-[#2E8B57]"
+                  />
+                </div>
+
+                {/* Select con pacientes filtrados */}
+                <div className="space-y-2">
+                  <Label className="text-[10px] font-black uppercase text-gray-400 tracking-wider">
+                    Paciente
+                  </Label>
                   <Select value={selectedPaciente} onValueChange={setSelectedPaciente}>
                     <SelectTrigger className="border-2 border-[#D1E8D5] rounded-xl h-12">
                       <SelectValue placeholder="Selecciona un paciente" />
                     </SelectTrigger>
-                    <SelectContent className="rounded-xl">
-                      {misPacientes.map((paciente) => (
-                        <SelectItem key={paciente.id} value={paciente.id} className="font-bold text-xs uppercase">
-                          {paciente.nombre} ({paciente.puntos} pts)
-                        </SelectItem>
-                      ))}
+                    <SelectContent className="rounded-xl max-h-60 overflow-y-auto">
+                      {filteredPacientes.length === 0 ? (
+                        <div className="p-4 text-center text-gray-500 text-xs">
+                          No se encontraron pacientes
+                        </div>
+                      ) : (
+                        filteredPacientes.map((paciente) => (
+                          <SelectItem 
+                            key={paciente.id} 
+                            value={paciente.id.toString()} 
+                            className="font-bold text-xs uppercase py-3"
+                          >
+                            {paciente.nombre} {paciente.apellido} ({paciente.correo}) - {paciente.puntos} pts
+                          </SelectItem>
+                        ))
+                      )}
                     </SelectContent>
                   </Select>
                 </div>
+
+                {/* Cantidad de puntos */}
                 <div className="space-y-2">
-                  <Label htmlFor="puntos" className="text-[10px] font-black uppercase text-gray-400 tracking-wider">Cantidad de Puntos</Label>
+                  <Label htmlFor="puntos" className="text-[10px] font-black uppercase text-gray-400 tracking-wider">
+                    Cantidad de Puntos
+                  </Label>
                   <Input
                     id="puntos"
                     type="number"
+                    min="1"
                     className="border-2 border-[#D1E8D5] rounded-xl h-12 font-bold"
                     value={puntosAsignar}
                     onChange={(e) => setPuntosAsignar(e.target.value)}
                     required
                   />
                 </div>
-                <Button type="submit" className="w-full bg-[#2E8B57] text-white font-black uppercase text-[10px] tracking-widest h-14 rounded-xl">
-                  Confirmar Recompensa
-                </Button>
+
+                {/* Botones */}
+                <div className="flex gap-4 pt-4">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => {
+                      setIsDialogOpen(false);
+                      setSearchQuery('');
+                    }}
+                    className="flex-1 border-2 border-[#D1E8D5] text-gray-500 font-black uppercase rounded-xl h-14"
+                  >
+                    Cancelar
+                  </Button>
+                  <Button
+                    type="submit"
+                    className="flex-1 bg-[#2E8B57] hover:bg-[#1A3026] text-white font-black uppercase text-[10px] tracking-widest h-14 rounded-xl"
+                  >
+                    Confirmar Recompensa
+                  </Button>
+                </div>
               </form>
             </DialogContent>
           </Dialog>
         </div>
 
-        {/* Niveles Visuales */}
+        {/* Resto del JSX igual que antes */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           {[
             { n: 'Iniciante', pts: '0-99', color: 'text-emerald-600', bg: 'bg-emerald-50', icon: Target },
@@ -247,50 +340,59 @@ export function Gamificacion() {
               </CardTitle>
             </CardHeader>
             <CardContent className="p-8 space-y-6">
-              {pacientesOrdenados.map((paciente, index) => {
-                const nivel = getNivelPaciente(paciente.puntos);
-                const progreso = getProgresoNivel(paciente.puntos);
-                return (
-                  <div key={paciente.id} className="group relative">
-                    <div className="flex items-center justify-between mb-4">
-                      <div className="flex items-center gap-4">
-                        <div className={`h-12 w-12 rounded-2xl flex items-center justify-center font-black text-sm border-2 ${
-                          index === 0 ? 'bg-yellow-400 border-yellow-500 text-white' : 'bg-white border-[#D1E8D5] text-[#2E8B57]'
-                        }`}>
-                          #{index + 1}
-                        </div>
-                        <div>
-                          <p className="font-black text-[#1A3026] uppercase text-xs">{paciente.nombre} {paciente.apellido}</p>
-                          <div className={`inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-lg border-2 ${nivel.border} ${nivel.bgColor}`}>
-                             <nivel.icon size={10} className={nivel.color} />
-                             <span className={`text-[8px] font-black uppercase ${nivel.color}`}>{nivel.nivel}</span>
-                          </div>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-lg font-black text-[#1A3026] leading-none">{paciente.puntos}</p>
-                        <p className="text-[8px] font-bold text-gray-400 uppercase tracking-widest mt-1">Puntos Totales</p>
-                      </div>
-                    </div>
-                    <div className="space-y-1">
-                      <div className="flex justify-between text-[9px] font-black uppercase text-gray-400 tracking-tighter">
-                        <span>Progreso de Nivel</span>
-                        <span>{progreso.toFixed(0)}%</span>
-                      </div>
-                      <Progress value={progreso} className="h-1.5 bg-[#F0FFF4]" />
-                    </div>
-                  </div>
-                );
-              })}
-              {pacientesOrdenados.length === 0 && (
-                <div className="text-center py-8 text-gray-500">
+              {pacientesOrdenados.length === 0 ? (
+                <div className="text-center py-12 text-gray-500">
                   No hay pacientes asignados aún
                 </div>
+              ) : (
+                pacientesOrdenados.map((paciente, index) => {
+                  const nivel = getNivelPaciente(paciente.puntos);
+                  const progreso = getProgresoNivel(paciente.puntos);
+                  return (
+                    <div key={paciente.id} className="group relative">
+                      <div className="flex items-center justify-between mb-4">
+                        <div className="flex items-center gap-4">
+                          <div className={`h-12 w-12 rounded-2xl flex items-center justify-center font-black text-sm border-2 ${
+                            index === 0 ? 'bg-yellow-400 border-yellow-500 text-white' : 'bg-white border-[#D1E8D5] text-[#2E8B57]'
+                          }`}>
+                            #{index + 1}
+                          </div>
+                          <div>
+                            <p className="font-black text-[#1A3026] uppercase text-xs">
+                              {paciente.nombre} {paciente.apellido}
+                            </p>
+                            <div className={`inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-lg border-2 ${nivel.border} ${nivel.bgColor}`}>
+                              <nivel.icon size={10} className={nivel.color} />
+                              <span className={`text-[8px] font-black uppercase ${nivel.color}`}>
+                                {nivel.nivel}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-lg font-black text-[#1A3026] leading-none">
+                            {paciente.puntos}
+                          </p>
+                          <p className="text-[8px] font-bold text-gray-400 uppercase tracking-widest mt-1">
+                            Puntos Totales
+                          </p>
+                        </div>
+                      </div>
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-[9px] font-black uppercase text-gray-400 tracking-tighter">
+                          <span>Progreso de Nivel</span>
+                          <span>{progreso.toFixed(0)}%</span>
+                        </div>
+                        <Progress value={progreso} className="h-1.5 bg-[#F0FFF4]" />
+                      </div>
+                    </div>
+                  );
+                })
               )}
             </CardContent>
           </Card>
 
-          {/* Metas y Rendimiento - Simplificado a base en puntos (ya que calorias no existe en DB) */}
+          {/* Cumplimiento de Metas */}
           <Card className="rounded-[2.5rem] border-2 border-[#D1E8D5] overflow-hidden bg-white shadow-sm">
             <CardHeader className="bg-[#F8FFF9] border-b border-[#D1E8D5] p-8">
               <CardTitle className="text-sm font-[900] text-[#1A3026] uppercase tracking-[2px] flex items-center gap-2">
@@ -298,33 +400,34 @@ export function Gamificacion() {
               </CardTitle>
             </CardHeader>
             <CardContent className="p-8 space-y-8">
-              {misPacientes.map((paciente) => {
-                const cumplimiento = (paciente.puntos / 300) * 100;  // Ejemplo basado en puntos (ajusta a tu lógica real)
-                const esExitoso = cumplimiento >= 90;
-                return (
-                  <div key={paciente.id} className="space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="font-black text-[#1A3026] uppercase text-xs">{paciente.nombre}</p>
-                        <p className="text-[10px] font-bold text-gray-400 tracking-tight">META: 300 PTS</p>
-                      </div>
-                      <div className={`px-4 py-2 rounded-xl border-2 font-black text-[10px] uppercase shadow-sm ${
-                        esExitoso ? 'bg-[#F0FFF4] border-[#D1E8D5] text-[#2E8B57]' : 'bg-orange-50 border-orange-100 text-orange-600'
-                      }`}>
-                        {cumplimiento.toFixed(0)}% Performance
-                      </div>
-                    </div>
-                    <Progress 
-                      value={Math.min(cumplimiento, 100)} 
-                      className={`h-3 rounded-full ${esExitoso ? 'bg-[#F0FFF4]' : 'bg-orange-50'}`} 
-                    />
-                  </div>
-                );
-              })}
-              {misPacientes.length === 0 && (
+              {misPacientes.length === 0 ? (
                 <div className="p-12 text-center text-gray-500">
                   No hay pacientes registrados aún
                 </div>
+              ) : (
+                misPacientes.map((paciente) => {
+                  const cumplimiento = (paciente.puntos / 300) * 100;  // Ejemplo basado en puntos (ajusta a tu lógica real)
+                  const esExitoso = cumplimiento >= 90;
+                  return (
+                    <div key={paciente.id} className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="font-black text-[#1A3026] uppercase text-xs">{paciente.nombre}</p>
+                          <p className="text-[10px] font-bold text-gray-400 tracking-tight">META: 300 PTS</p>
+                        </div>
+                        <div className={`px-4 py-2 rounded-xl border-2 font-black text-[10px] uppercase shadow-sm ${
+                          esExitoso ? 'bg-[#F0FFF4] border-[#D1E8D5] text-[#2E8B57]' : 'bg-orange-50 border-orange-100 text-orange-600'
+                        }`}>
+                          {cumplimiento.toFixed(0)}% Performance
+                        </div>
+                      </div>
+                      <Progress 
+                        value={Math.min(cumplimiento, 100)} 
+                        className={`h-3 rounded-full ${esExitoso ? 'bg-[#F0FFF4]' : 'bg-orange-50'}`} 
+                      />
+                    </div>
+                  );
+                })
               )}
             </CardContent>
           </Card>

@@ -6,10 +6,13 @@ import { Label } from '@/app/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/app/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/app/components/ui/dialog';
 import { Badge } from '@/app/components/ui/badge';
-import { useAuth } from '@/app/context/AuthContext';
+import { useAuth } from '@/app/context/useAuth';
 import { supabase } from '@/app/context/supabaseClient';
 import { Calendar, Clock, Plus, CheckCircle, History, LayoutDashboard } from 'lucide-react';
 import { toast } from 'sonner';
+
+const SONORA_TIMEZONE = 'America/Hermosillo';
+const SONORA_OFFSET_MS = 7 * 60 * 60 * 1000; // UTC-7 en milisegundos
 
 export function GestionCitas() {
   const { user } = useAuth();
@@ -19,6 +22,8 @@ export function GestionCitas() {
   const [hora, setHora] = useState('');
   const [citas, setCitas] = useState<any[]>([]);
   const [pacientes, setPacientes] = useState<any[]>([]);
+  const [filteredPacientes, setFilteredPacientes] = useState<any[]>([]); // Para búsqueda
+  const [searchQuery, setSearchQuery] = useState(''); // Texto de búsqueda
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -36,30 +41,33 @@ export function GestionCitas() {
       try {
         const nutriologoId = Number(user.nutriologoId);
 
-        // Pacientes asignados
+        // 1. Pacientes asignados
         const { data: relaciones, error: errRel } = await supabase
           .from('paciente_nutriologo')
           .select('id_paciente')
-          .eq('id_nutriologo', nutriologoId) // integer
+          .eq('id_nutriologo', nutriologoId)
           .eq('activo', true);
 
         if (errRel) throw errRel;
 
-        if (relaciones?.length) {
-          const pacienteIds = relaciones.map(r => r.id_paciente);
+        const pacienteIds = relaciones?.map(r => r.id_paciente) || [];
 
+        if (pacienteIds.length === 0) {
+          setPacientes([]);
+          setFilteredPacientes([]);
+          // Cargar citas aunque no haya pacientes
+        } else {
           const { data: pacientesData, error: errPac } = await supabase
             .from('pacientes')
-            .select('id_paciente, nombre, apellido')
+            .select('id_paciente, nombre, apellido, correo')
             .in('id_paciente', pacienteIds);
 
           if (errPac) throw errPac;
           setPacientes(pacientesData || []);
-        } else {
-          setPacientes([]);
+          setFilteredPacientes(pacientesData || []);
         }
 
-        // Citas con join a pacientes y pagos
+        // 2. Citas
         const { data: citasData, error: errCitas } = await supabase
           .from('citas')
           .select(`
@@ -70,24 +78,33 @@ export function GestionCitas() {
             pacientes!inner (nombre, apellido),
             pagos!left (monto, estado)
           `)
-          .eq('id_nutriologo', nutriologoId) // integer
+          .eq('id_nutriologo', nutriologoId)
           .order('fecha_hora', { ascending: false });
 
         if (errCitas) throw errCitas;
 
-        const citasFormateadas = citasData?.map(c => ({
-          id: c.id_cita,
-          fecha: new Intl.DateTimeFormat('es-MX', { dateStyle: 'medium', timeZone: 'America/Tijuana' }).format(new Date(c.fecha_hora)),
-          hora: new Intl.DateTimeFormat('es-MX', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'America/Tijuana' }).format(new Date(c.fecha_hora)),
-          estado: c.estado,
-          pacienteNombre: `${c.pacientes?.nombre || ''} ${c.pacientes?.apellido || ''}`,
-          pagada: c.pagos?.some(p => p.estado === 'completado') || false,
-          monto: c.pagos?.[0]?.monto || 800
-        })) || [];
+        const citasFormateadas = citasData?.map(c => {
+          const utcDate = new Date(c.fecha_hora);
+          const sonoraDate = new Date(utcDate.getTime() - SONORA_OFFSET_MS);
+
+          return {
+            id: c.id_cita,
+            fecha: new Intl.DateTimeFormat('es-MX', { dateStyle: 'medium' }).format(sonoraDate),
+            hora: new Intl.DateTimeFormat('es-MX', { 
+              hour: '2-digit', 
+              minute: '2-digit', 
+              hour12: true 
+            }).format(sonoraDate),
+            estado: c.estado,
+            pacienteNombre: `${c.pacientes?.nombre || ''} ${c.pacientes?.apellido || ''}`,
+            pagada: c.pagos?.some(p => p.estado === 'completado') || false,
+            monto: c.pagos?.[0]?.monto || 800
+          };
+        }) || [];
 
         setCitas(citasFormateadas);
       } catch (err: any) {
-        console.error('Error cargando citas/pacientes:', err);
+        console.error('Error cargando datos:', err);
         toast.error('No se pudieron cargar las citas');
       } finally {
         setLoading(false);
@@ -100,6 +117,41 @@ export function GestionCitas() {
   const citasPendientes = citas.filter(c => c.estado === 'pendiente' || c.estado === 'confirmada');
   const citasCompletadas = citas.filter(c => c.estado === 'completada');
 
+  // Búsqueda en tiempo real
+  const handleSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const query = e.target.value.toLowerCase().trim();
+    setSearchQuery(query);
+
+    if (!query) {
+      setFilteredPacientes(pacientes);
+      return;
+    }
+
+    const filtered = pacientes.filter(p =>
+      p.nombre.toLowerCase().includes(query) ||
+      p.apellido.toLowerCase().includes(query) ||
+      p.correo.toLowerCase().includes(query)
+    );
+
+    setFilteredPacientes(filtered);
+  };
+
+  // Enter para autoseleccionar si solo queda 1 resultado
+  const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (filteredPacientes.length === 1) {
+        const unico = filteredPacientes[0];
+        setSelectedPaciente(unico.id_paciente.toString());
+        toast.success(`Paciente seleccionado: ${unico.nombre} ${unico.apellido}`);
+      } else if (filteredPacientes.length > 1) {
+        toast.info('Varios pacientes encontrados. Selecciona uno del menú.');
+      } else {
+        toast.warning('No se encontró ningún paciente.');
+      }
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -108,26 +160,30 @@ export function GestionCitas() {
       return;
     }
 
-    // Crear fecha en timezone local (Mexicali)
-    const fechaHoraLocal = new Date(`${fecha}T${hora}`);
-    const now = new Date();
-
-    if (fechaHoraLocal < now) {
-      toast.error('No se puede agendar citas en fechas pasadas. Por favor, selecciona una fecha y hora futuras.');
-      return;
-    }
-
     try {
-      const nutriologoId = Number(user.nutriologoId);
+      const [year, month, day] = fecha.split('-').map(Number);
+      const [hours, minutes] = hora.split(':').map(Number);
+      const localSonora = new Date(Date.UTC(year, month - 1, day, hours, minutes, 0));
 
-      // Convertir a UTC para guardar en Supabase
-      const fechaHoraUTC = fechaHoraLocal.toISOString();
+      const now = new Date();
+      if (localSonora < now) {
+        toast.error('No se puede agendar citas en fechas pasadas.');
+        return;
+      }
+
+      const utcDate = new Date(localSonora.getTime() + SONORA_OFFSET_MS);
+      const fechaHoraUTC = utcDate.toISOString();
+
+      console.log('[DEBUG] Hora elegida Sonora:', localSonora.toLocaleString('es-MX', { timeZone: SONORA_TIMEZONE }));
+      console.log('[DEBUG] Guardando como UTC:', fechaHoraUTC);
+
+      const nutriologoId = Number(user.nutriologoId);
 
       const { error } = await supabase
         .from('citas')
         .insert({
           id_paciente: Number(selectedPaciente),
-          id_nutriologo: nutriologoId, // integer
+          id_nutriologo: nutriologoId,
           fecha_hora: fechaHoraUTC,
           estado: 'pendiente',
           duracion_minutos: 60,
@@ -136,13 +192,13 @@ export function GestionCitas() {
 
       if (error) throw error;
 
-      toast.success('Cita agendada exitosamente. Se notificará al paciente.');
+      toast.success('Cita agendada exitosamente');
 
-      // Cerrar y limpiar
       setIsDialogOpen(false);
       setSelectedPaciente('');
       setFecha('');
       setHora('');
+      setSearchQuery('');
 
       // Refrescar lista
       const { data: nuevasCitas, error: errRefresh } = await supabase
@@ -155,19 +211,28 @@ export function GestionCitas() {
           pacientes!inner (nombre, apellido),
           pagos!left (monto, estado)
         `)
-        .eq('id_nutriologo', nutriologoId) // integer
+        .eq('id_nutriologo', nutriologoId)
         .order('fecha_hora', { ascending: false });
 
       if (!errRefresh) {
-        const formateadas = nuevasCitas?.map(c => ({
-          id: c.id_cita,
-          fecha: new Intl.DateTimeFormat('es-MX', { dateStyle: 'medium', timeZone: 'America/Tijuana' }).format(new Date(c.fecha_hora)),
-          hora: new Intl.DateTimeFormat('es-MX', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'America/Tijuana' }).format(new Date(c.fecha_hora)),
-          estado: c.estado,
-          pacienteNombre: `${c.pacientes?.nombre || ''} ${c.pacientes?.apellido || ''}`,
-          pagada: c.pagos?.some(p => p.estado === 'completado') || false,
-          monto: c.pagos?.[0]?.monto || 800
-        })) || [];
+        const formateadas = nuevasCitas?.map(c => {
+          const utcDate = new Date(c.fecha_hora);
+          const sonoraDate = new Date(utcDate.getTime() - SONORA_OFFSET_MS);
+
+          return {
+            id: c.id_cita,
+            fecha: new Intl.DateTimeFormat('es-MX', { dateStyle: 'medium' }).format(sonoraDate),
+            hora: new Intl.DateTimeFormat('es-MX', { 
+              hour: '2-digit', 
+              minute: '2-digit', 
+              hour12: true 
+            }).format(sonoraDate),
+            estado: c.estado,
+            pacienteNombre: `${c.pacientes?.nombre || ''} ${c.pacientes?.apellido || ''}`,
+            pagada: c.pagos?.some(p => p.estado === 'completado') || false,
+            monto: c.pagos?.[0]?.monto || 800
+          };
+        }) || [];
         setCitas(formateadas);
       }
     } catch (err: any) {
@@ -241,25 +306,56 @@ export function GestionCitas() {
                 Agendar Cita
               </Button>
             </DialogTrigger>
-            <DialogContent className="rounded-[2.5rem] border-2 border-[#D1E8D5] bg-white p-8 max-w-md font-sans">
+            <DialogContent className="rounded-[2.5rem] border-2 border-[#D1E8D5] bg-white p-8 max-w-lg font-sans">
               <DialogHeader>
                 <DialogTitle className="text-2xl font-[900] text-[#2E8B57] uppercase tracking-[2px]">
                   Nueva Consulta
                 </DialogTitle>
               </DialogHeader>
               <form onSubmit={handleSubmit} className="space-y-6 mt-6">
+                {/* Campo de búsqueda */}
                 <div className="space-y-2">
-                  <Label className="text-[10px] font-black uppercase text-gray-400 tracking-[1px] ml-1">Paciente</Label>
+                  <Label className="text-[10px] font-black uppercase text-gray-400 tracking-wider">
+                    Buscar Paciente
+                  </Label>
+                  <Input
+                    placeholder="Escribe nombre, apellido o correo..."
+                    value={searchQuery}
+                    onChange={(e) => {
+                      setSearchQuery(e.target.value);
+                      handleSearch(e); // Filtra en tiempo real
+                    }}
+                    onKeyDown={handleSearchKeyDown} // Enter para autoseleccionar
+                    className="border-2 border-[#D1E8D5] rounded-xl h-12 font-bold focus:ring-[#2E8B57]"
+                  />
+                </div>
+
+                {/* Select de paciente */}
+                <div className="space-y-2">
+                  <Label className="text-[10px] font-black uppercase text-gray-400 tracking-wider">
+                    Paciente Seleccionado
+                  </Label>
                   <Select value={selectedPaciente} onValueChange={setSelectedPaciente}>
-                    <SelectTrigger className="border-2 border-[#D1E8D5] rounded-xl h-12 focus:ring-[#2E8B57]">
-                      <SelectValue placeholder="Selecciona un paciente" />
+                    <SelectTrigger className="border-2 border-[#D1E8D5] rounded-xl h-12">
+                      <SelectValue placeholder="Selecciona o busca un paciente" />
                     </SelectTrigger>
-                    <SelectContent className="rounded-xl border-2 border-[#D1E8D5]">
-                      {pacientes.map((p) => (
-                        <SelectItem key={p.id_paciente} value={p.id_paciente.toString()} className="font-bold text-xs">
-                          {p.nombre} {p.apellido}
-                        </SelectItem>
-                      ))}
+                    <SelectContent className="rounded-xl max-h-60 overflow-y-auto">
+                      {filteredPacientes.length === 0 && searchQuery ? (
+                        <div className="p-4 text-center text-gray-500 text-xs">
+                          No se encontraron pacientes
+                        </div>
+                      ) : (
+                        filteredPacientes.map((p) => (
+                          <SelectItem 
+                            key={p.id_paciente} 
+                            value={p.id_paciente.toString()} 
+                            className="font-bold text-xs uppercase py-3"
+                          >
+                            {p.nombre} {p.apellido} 
+                            <span className="text-gray-500 ml-2">({p.correo})</span>
+                          </SelectItem>
+                        ))
+                      )}
                     </SelectContent>
                   </Select>
                   <p className="text-[9px] font-bold text-gray-400 uppercase leading-tight mt-1">
@@ -296,7 +392,11 @@ export function GestionCitas() {
                   <Button 
                     type="button" 
                     variant="outline"
-                    onClick={() => setIsDialogOpen(false)}
+                    onClick={() => {
+                      setIsDialogOpen(false);
+                      setSearchQuery('');
+                      setSelectedPaciente('');
+                    }}
                     className="flex-1 border-2 border-[#D1E8D5] text-gray-400 font-black text-[10px] uppercase rounded-xl h-12 hover:bg-gray-50"
                   >
                     Cancelar

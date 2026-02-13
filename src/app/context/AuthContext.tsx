@@ -1,20 +1,21 @@
+// src/app/context/AuthContext.tsx
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { supabase } from './supabaseClient';
 import { toast } from 'sonner';
 
 export interface User {
-  id: string; // UUID de auth (para id_auth_user)
-  nutriologoId?: string; // ID numérico de nutriólogos
-  adminId?: string; // ID numérico de administradores
+  id: string;
+  nutriologoId?: string;
+  adminId?: string;
   email: string;
   nombre: string;
   apellido: string;
-  nombreUsuario: string; // Lo dejamos en la interfaz, pero lo seteamos vacío si no existe
+  nombreUsuario: string;
   celular: string;
   rol: 'admin' | 'nutriologo';
   tarifa?: number;
-  descripcion?: string; // Lo dejamos opcional, pero lo seteamos vacío
-  fotoPerfil?: string; // Lo dejamos opcional, pero lo seteamos null
+  descripcion?: string;
+  fotoPerfil?: string;
 }
 
 interface AuthContextType {
@@ -25,71 +26,86 @@ interface AuthContextType {
   loading: boolean;
 }
 
-const AuthContext = createContext<AuthContextType | undefined>(undefined);
+// ¡Export nombrado aquí!
+export const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isInitialized, setIsInitialized] = useState(false);
 
   useEffect(() => {
-    // 1. Cargar cache inmediatamente (instantáneo)
+    if (isInitialized) return;
+    setIsInitialized(true);
+
     const cached = localStorage.getItem('nutriu_user');
     if (cached) {
       try {
         const parsed = JSON.parse(cached) as User;
         setUser(parsed);
-        console.log('[Auth] User cargado desde cache al inicio:', parsed.rol);
+        console.log('[Auth] Restaurado desde caché → rol:', parsed.rol);
       } catch (e) {
-        console.error('[Auth] Cache corrupto:', e);
+        console.warn('[Auth] Caché corrupto, eliminando...');
         localStorage.removeItem('nutriu_user');
       }
     }
 
-    setLoading(false); // Siempre termina loading inicial después de cache sync
+    const initializeAuth = async () => {
+      console.log('[Auth] Inicializando autenticación...');
+      setLoading(true);
 
-    // 2. Validar sesión real (background)
-    const validateSession = async () => {
-      console.log('[Auth] Validando sesión real en background...');
       try {
-        const { data: { session } } = await supabase.auth.getSession();
+        const { data: { session }, error } = await supabase.auth.getSession();
+        if (error) throw error;
+
         if (session?.user) {
-          console.log('[Auth] Sesión válida, cargando perfil...');
-          fetchUserData(session.user.id);
+          console.log('[Auth] Sesión activa detectada, cargando perfil...');
+          await fetchUserData(session.user.id);
         } else {
           console.log('[Auth] No hay sesión activa');
           setUser(null);
           localStorage.removeItem('nutriu_user');
         }
-      } catch (err) {
-        console.error('[Auth] Error validando sesión:', err);
+      } catch (err: any) {
+        console.error('[Auth] Error al inicializar:', err.message);
+        setUser(null);
+        localStorage.removeItem('nutriu_user');
+      } finally {
+        setLoading(false);
       }
     };
 
-    validateSession();
+    initializeAuth();
 
-    // Listener de cambios de auth
     const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
+      console.log('[Auth] Cambio de estado detectado:', event);
+
       if (event === 'SIGNED_IN' && session?.user) {
-        fetchUserData(session.user.id);
+        await fetchUserData(session.user.id);
       } else if (event === 'SIGNED_OUT') {
         setUser(null);
         localStorage.removeItem('nutriu_user');
+      } else if (event === 'PASSWORD_RECOVERY') {
+        console.log('[Auth] Modo recuperación de contraseña activado');
       }
     });
 
-    return () => authListener.subscription.unsubscribe();
-  }, []);
+    return () => {
+      authListener.subscription.unsubscribe();
+    };
+  }, [isInitialized]);
 
   const fetchUserData = async (userId: string) => {
-    console.log('[fetchUserData] Iniciando para UUID:', userId);
+    console.log('[fetchUserData] Cargando perfil para UID:', userId);
 
     try {
-      // Administradores - SOLO columnas que existen en tu tabla
-      const { data: adminData } = await supabase
+      const { data: adminData, error: adminError } = await supabase
         .from('administradores')
         .select('id_admin, nombre, apellido, correo, numero_celular')
         .eq('id_auth_user', userId)
         .maybeSingle();
+
+      if (adminError) throw adminError;
 
       if (adminData) {
         const newUser: User = {
@@ -98,24 +114,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           email: adminData.correo || '',
           nombre: adminData.nombre || '',
           apellido: adminData.apellido || '',
-          nombreUsuario: '',       // No existe → vacío
+          nombreUsuario: '',
           celular: adminData.numero_celular || '',
           rol: 'admin',
-          descripcion: '',         // No existe → vacío
-          fotoPerfil: null,        // No existe → null
         };
-        console.log('[fetchUserData] Admin encontrado - UUID:', userId);
         setUser(newUser);
         localStorage.setItem('nutriu_user', JSON.stringify(newUser));
+        console.log('[fetchUserData] Administrador encontrado');
         return;
       }
 
-      // Nutriólogos (deja como está, ya funciona)
-      const { data: nutriData } = await supabase
+      const { data: nutriData, error: nutriError } = await supabase
         .from('nutriologos')
         .select('id_nutriologo, nombre, apellido, correo, numero_celular, tarifa_consulta, nombre_usuario, descripcion, foto_perfil')
         .eq('id_auth_user', userId)
         .maybeSingle();
+
+      if (nutriError) throw nutriError;
 
       if (nutriData) {
         const newUser: User = {
@@ -131,19 +146,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           descripcion: nutriData.descripcion || '',
           fotoPerfil: nutriData.foto_perfil || null,
         };
-        console.log('[fetchUserData] Nutriólogo encontrado - UUID:', userId, 'Nutri ID:', newUser.nutriologoId);
         setUser(newUser);
         localStorage.setItem('nutriu_user', JSON.stringify(newUser));
+        console.log('[fetchUserData] Nutriólogo encontrado');
         return;
       }
 
-      console.warn('[fetchUserData] No encontrado');
-      toast.warning('No se encontró perfil asociado. Verifica tu cuenta.');
+      console.warn('[fetchUserData] No se encontró perfil asociado');
+      toast.warning('No se encontró perfil asociado a esta cuenta');
       setUser(null);
       localStorage.removeItem('nutriu_user');
     } catch (error: any) {
-      console.error('[fetchUserData] Error:', error?.message || error);
-      toast.error('Error cargando perfil: ' + (error?.message || 'Intenta de nuevo'));
+      console.error('[fetchUserData] Error:', error.message);
+      toast.error('Error al cargar el perfil: ' + (error.message || 'Intenta nuevamente'));
       setUser(null);
       localStorage.removeItem('nutriu_user');
     }
@@ -154,14 +169,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const { data, error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) throw error;
+
       if (data.user) {
         await fetchUserData(data.user.id);
         return true;
       }
       return false;
     } catch (error: any) {
-      console.error('Login error:', error.message);
-      toast.error('Error en login: ' + (error.message || 'Credenciales inválidas'));
+      console.error('[login] Error:', error.message);
+      toast.error('Error al iniciar sesión: ' + (error.message || 'Credenciales inválidas'));
       return false;
     } finally {
       setLoading(false);
@@ -169,27 +185,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const logout = async () => {
-    await supabase.auth.signOut();
-    setUser(null);
-    localStorage.removeItem('nutriu_user');
+    try {
+      await supabase.auth.signOut();
+      setUser(null);
+      localStorage.removeItem('nutriu_user');
+      toast.success('Sesión cerrada correctamente');
+    } catch (error: any) {
+      console.error('[logout] Error:', error.message);
+      toast.error('Error al cerrar sesión');
+    }
   };
 
   const updateProfile = async (data: Partial<User>) => {
     if (!user) {
-      console.warn('[updateProfile] No hay usuario autenticado');
+      toast.error('No hay sesión activa');
       return;
     }
 
     const table = user.rol === 'admin' ? 'administradores' : 'nutriologos';
-
     const updateData: any = {};
 
-    // Solo campos que existen en ambas tablas
-    if (data.nombre !== undefined) updateData.nombre = data.nombre;
-    if (data.apellido !== undefined) updateData.apellido = data.apellido;
-    if (data.celular !== undefined) updateData.numero_celular = data.celular;
+    if (data.nombre) updateData.nombre = data.nombre;
+    if (data.apellido) updateData.apellido = data.apellido;
+    if (data.celular) updateData.numero_celular = data.celular;
 
-    // Campos solo para nutriólogos (admin no los tiene)
     if (user.rol === 'nutriologo') {
       if (data.tarifa !== undefined) updateData.tarifa_consulta = data.tarifa;
       if (data.descripcion !== undefined) updateData.descripcion = data.descripcion;
@@ -197,10 +216,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (data.nombreUsuario !== undefined) updateData.nombre_usuario = data.nombreUsuario;
     }
 
-    if (Object.keys(updateData).length === 0) {
-      console.log('[updateProfile] No hay cambios para guardar');
-      return;
-    }
+    if (Object.keys(updateData).length === 0) return;
 
     try {
       const { error } = await supabase
@@ -213,12 +229,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const updatedUser = { ...user, ...data };
       setUser(updatedUser);
       localStorage.setItem('nutriu_user', JSON.stringify(updatedUser));
-
       toast.success('Perfil actualizado correctamente');
     } catch (error: any) {
       console.error('[updateProfile] Error:', error.message);
-      toast.error('No se pudo guardar el perfil: ' + (error.message || 'Intenta de nuevo'));
-      throw error;
+      toast.error('No se pudo actualizar el perfil: ' + (error.message || 'Intenta de nuevo'));
     }
   };
 
@@ -227,10 +241,4 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       {children}
     </AuthContext.Provider>
   );
-}
-
-export function useAuth() {
-  const context = useContext(AuthContext);
-  if (context === undefined) throw new Error('useAuth debe usarse dentro de AuthProvider');
-  return context;
 }

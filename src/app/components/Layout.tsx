@@ -1,5 +1,5 @@
 import { ReactNode, useState } from 'react';
-import { useAuth } from '@/app/context/AuthContext';
+import { useAuth } from '@/app/context/useAuth';
 import { Button } from '@/app/components/ui/button';
 import { 
   Home, // Cambiado por LayoutDashboard

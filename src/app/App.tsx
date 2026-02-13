@@ -1,8 +1,11 @@
 import { useState } from 'react';
-import { AuthProvider, useAuth } from '@/app/context/AuthContext';
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { AuthProvider} from '@/app/context/AuthContext';
 import { Login } from '@/app/components/Login';
+import { ResetPassword } from '@/app/components/ResetPassword';
 import { Layout } from '@/app/components/Layout';
 import { Toaster } from '@/app/components/ui/sonner';
+import { useAuth } from '@/app/context/useAuth';
 
 // Admin components
 import { DashboardAdmin } from '@/app/components/admin/DashboardAdmin';
@@ -18,12 +21,15 @@ import { GestionPagos } from '@/app/components/nutriologo/GestionPagos';
 import { Gamificacion } from '@/app/components/nutriologo/Gamificacion';
 import { Perfil } from '@/app/components/nutriologo/Perfil';
 
-function AppContent() {
+// Componente protegido (modificado para permitir reset-password siempre)
+function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
-  const [activeTab, setActiveTab] = useState('dashboard');
+  const location = useLocation();
 
-  // Log principal para depurar en cada render
-  console.log('[AppContent] Estado actual - loading:', loading, 'user:', user ? user : 'null');
+  // Permitir SIEMPRE acceso a reset-password (para el flujo de recuperación)
+  if (location.pathname === '/reset-password') {
+    return children;
+  }
 
   if (loading) {
     return (
@@ -36,21 +42,18 @@ function AppContent() {
   }
 
   if (!user) {
-    console.log('[AppContent] No hay usuario → mostrando Login');
-    return <Login />;
+    return <Navigate to="/login" replace />;
   }
 
-  // Seguridad extra: si user existe pero rol no está definido
-  if (!user.rol) {
-    console.error('[AppContent] User existe pero rol es undefined:', user);
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-[#F0FFF4]">
-        <div className="text-red-600 font-bold text-2xl text-center">
-          Error: Sesión restaurada pero rol no detectado.<br />
-          Cierra sesión y vuelve a entrar.
-        </div>
-      </div>
-    );
+  return children;
+}
+
+function AppContent() {
+  const { user } = useAuth();
+  const [activeTab, setActiveTab] = useState('dashboard');
+
+  if (!user) {
+    return null;
   }
 
   console.log('[AppContent] Renderizando dashboard para rol:', user.rol);
@@ -105,7 +108,21 @@ function AppContent() {
 export default function App() {
   return (
     <AuthProvider>
-      <AppContent />
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route path="/reset-password" element={<ResetPassword />} />
+
+        <Route
+          path="/"
+          element={
+            <ProtectedRoute>
+              <AppContent />
+            </ProtectedRoute>
+          }
+        />
+
+        <Route path="*" element={<Navigate to="/login" replace />} />
+      </Routes>
       <Toaster />
     </AuthProvider>
   );

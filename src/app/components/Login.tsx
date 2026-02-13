@@ -1,5 +1,6 @@
 import { useState, useEffect, memo } from 'react';
-import { useAuth } from '@/app/context/AuthContext';
+import { useAuth } from '@/app/context/useAuth';
+import { useNavigate } from 'react-router-dom'; // ← Import nuevo para redirigir
 import { 
   User, 
   Lock, 
@@ -13,8 +14,23 @@ import {
   Activity,
   Eye, 
   EyeOff, 
-  X
+  X,
+  Mail
 } from 'lucide-react';
+import { supabase } from '@/app/context/supabaseClient';
+import { toast } from 'sonner';
+import { 
+  Dialog, 
+  DialogContent, 
+  DialogHeader, 
+  DialogTitle, 
+  DialogTrigger, 
+  DialogDescription,
+  DialogFooter
+} from '@/app/components/ui/dialog';
+import { Button } from '@/app/components/ui/button';
+import { Input } from '@/app/components/ui/input';
+import { Label } from '@/app/components/ui/label';
 
 // --- FONDO DE PATRÓN INFINITO ---
 const StaticBackground = memo(() => {
@@ -61,7 +77,12 @@ export function Login() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [notification, setNotification] = useState<{ msg: string; type: 'error' | 'success' } | null>(null);
-  const [isExiting, setIsExiting] = useState(false); // Estado para la animación de salida
+  const [isExiting, setIsExiting] = useState(false);
+  const [resetEmail, setResetEmail] = useState('');
+  const [resetOpen, setResetOpen] = useState(false);
+  const [resetLoading, setResetLoading] = useState(false);
+  const navigate = useNavigate(); // ← Para redirigir después del login
+
   const { login } = useAuth();
 
   useEffect(() => {
@@ -92,11 +113,43 @@ export function Login() {
         setNotification({ msg: 'Credenciales incorrectas o usuario no autorizado', type: 'error' });
       } else {
         setNotification({ msg: '¡Bienvenido de nuevo!', type: 'success' });
-        // Iniciar animación de salida
+        // Animar salida
         setTimeout(() => setIsExiting(true), 1000);
+        // Redirigir al dashboard después de animación
+        setTimeout(() => navigate('/'), 1600); // ← Redirigir a ruta protegida (dashboard)
       }
     } catch (error) {
       setNotification({ msg: 'Error al iniciar sesión. Intenta de nuevo.', type: 'error' });
+    }
+  };
+
+  const handleResetPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!resetEmail) {
+      toast.error('Ingresa tu correo electrónico');
+      return;
+    }
+    if (!validateEmail(resetEmail)) {
+      toast.error('Ingresa un correo válido');
+      return;
+    }
+
+    setResetLoading(true);
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(resetEmail, {
+        redirectTo: `${window.location.origin}/reset-password` // URL donde el usuario cambiará la contraseña
+      });
+
+      if (error) throw error;
+
+      toast.success('¡Enlace de recuperación enviado! Revisa tu correo.');
+      setResetOpen(false);
+      setResetEmail('');
+    } catch (error: any) {
+      console.error('Error al enviar recuperación:', error);
+      toast.error(error.message || 'Error al enviar el enlace de recuperación');
+    } finally {
+      setResetLoading(false);
     }
   };
 
@@ -140,7 +193,7 @@ export function Login() {
             {/* Input Email */}
             <div className="space-y-3">
               <label className="block text-xs font-black uppercase tracking-[2px] text-[#4A4A4A] ml-2">
-                Correo Institucional
+                Correo Electrónico
               </label>
               <div className="relative group">
                 <div className="absolute left-5 top-1/2 -translate-y-1/2 text-[#2D6A4F] group-focus-within:scale-110 transition-transform">
@@ -182,7 +235,18 @@ export function Login() {
               </div>
             </div>
 
-            {/* Botón Profesional con Efecto Shimmer */}
+            {/* Enlace "¿Olvidaste tu contraseña?" */}
+            <div className="text-center mt-4">
+              <button
+                type="button"
+                onClick={() => setResetOpen(true)}
+                className="text-[#2D6A4F] hover:text-[#3CB371] font-bold text-sm underline transition-colors"
+              >
+                ¿Olvidaste tu contraseña?
+              </button>
+            </div>
+
+            {/* Botón de login */}
             <button
               type="submit"
               className="w-full py-5 bg-[#1B4332] hover:bg-[#2D6A4F] text-white font-black text-lg uppercase tracking-[4px] rounded-3xl shadow-2xl shadow-green-200 transition-all active:scale-[0.96] flex items-center justify-center gap-4 mt-6 overflow-hidden relative group"
@@ -200,6 +264,56 @@ export function Login() {
           </div>
         </div>
       </div>
+
+      {/* Modal para resetear contraseña */}
+      <Dialog open={resetOpen} onOpenChange={setResetOpen}>
+        <DialogContent className="rounded-[2.5rem] border-2 border-[#D1E8D5] p-8 max-w-md bg-white">
+          <DialogHeader>
+            <DialogTitle className="text-2xl font-[900] text-[#2E8B57] uppercase tracking-[2px]">
+              Recuperar Contraseña
+            </DialogTitle>
+            <DialogDescription className="text-gray-600 mt-2">
+              Ingresa tu correo electrónico y te enviaremos un enlace para crear una nueva contraseña.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleResetPassword} className="space-y-6 mt-6">
+            <div className="space-y-2">
+              <Label className="text-[10px] font-black uppercase text-gray-400 tracking-wider">
+                Correo Electrónico
+              </Label>
+              <div className="relative">
+                <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-[#2E8B57]" size={18} />
+                <Input
+                  type="email"
+                  placeholder="usuario@nutriu.com"
+                  value={resetEmail}
+                  onChange={(e) => setResetEmail(e.target.value)}
+                  className="pl-12 border-2 border-[#D1E8D5] rounded-2xl h-12"
+                  required
+                />
+              </div>
+            </div>
+
+            <DialogFooter className="flex gap-4 pt-4">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setResetOpen(false)}
+                className="flex-1 border-2 border-[#D1E8D5] text-gray-500 font-black uppercase rounded-xl h-14"
+              >
+                Cancelar
+              </Button>
+              <Button
+                type="submit"
+                disabled={resetLoading}
+                className="flex-1 bg-[#2E8B57] hover:bg-[#1A3026] text-white font-black uppercase rounded-xl h-14 disabled:opacity-50"
+              >
+                {resetLoading ? 'Enviando...' : 'Enviar Enlace'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
 
       <style jsx global>{`
         /* Animación de entrada: sube y aparece */
