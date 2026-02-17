@@ -10,7 +10,7 @@ import { supabase } from '@/app/context/supabaseClient';
 import { useAuth } from '@/app/context/useAuth';
 import { FileText, Download, Plus, Utensils, Coffee, Sun, Apple, Moon, Sparkles, Search } from 'lucide-react';
 import { toast } from 'sonner';
-
+//Listo para front
 export function GestionDietas() {
   const { user } = useAuth();
 
